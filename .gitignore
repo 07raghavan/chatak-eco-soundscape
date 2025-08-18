@@ -23,11 +23,18 @@ dist-ssr
 *.sln
 *.sw?
 
-# Environment variables
+# Environment variables - NEVER COMMIT THESE!
 .env
+.env.*
 .env.local
+.env.development
 .env.development.local
+.env.production
+.env.production.local
+.env.test
 .env.test.local
+backend/.env
+backend/.env.*
 
 # Backend specific
 backend/node_modules/
