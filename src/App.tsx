@@ -1,0 +1,104 @@
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import { AuthProvider } from './contexts/AuthContext';
+import { AppearanceProvider } from './contexts/AppearanceContext';
+import AppearanceClassManager from './components/AppearanceClassManager';
+import { GlobalSegmentationStatus } from './components/GlobalSegmentationStatus';
+
+import Dashboard from "./pages/Dashboard";
+import Settings from "./pages/Settings";
+import Profile from "./pages/Profile";
+import CreateProject from "./pages/CreateProject";
+import ProjectPlatform from "./pages/ProjectPlatform";
+import SitesManagement from "./pages/SitesManagement";
+import CreateSite from "./pages/CreateSite";
+import SegmentationPage from "./pages/SegmentationPage";
+import AEDPage from "./pages/AEDPage";
+import Home from "./pages/Home";
+import ProtectedRoute from "./components/ProtectedRoute";
+
+const queryClient = new QueryClient();
+
+function App() {
+  return (
+    <GoogleOAuthProvider clientId="89573306003-f5sto78de7rb873rg4v0qi49r05r8tlu.apps.googleusercontent.com">
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <AuthProvider>
+            <AppearanceProvider>
+              <AppearanceClassManager />
+            <Router>
+              <Routes>
+                {/* Public Routes */}
+                <Route path="/" element={<Home />} />
+
+                {/* Protected Routes */}
+                <Route path="/dashboard" element={
+                  <ProtectedRoute>
+                    <Dashboard />
+                  </ProtectedRoute>
+                } />
+                
+                <Route path="/create-project" element={
+                  <ProtectedRoute>
+                    <CreateProject />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId" element={
+                  <ProtectedRoute>
+                    <ProjectPlatform />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/sites" element={
+                  <ProtectedRoute>
+                    <SitesManagement />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/sites/create" element={
+                  <ProtectedRoute>
+                    <CreateSite />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/segmentation" element={
+                  <ProtectedRoute>
+                    <SegmentationPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/recordings/:recordingId/aed" element={
+                  <ProtectedRoute>
+                    <AEDPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/profile" element={
+                  <ProtectedRoute>
+                    <Profile />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/settings" element={
+                  <ProtectedRoute>
+                    <Settings />
+                  </ProtectedRoute>
+                } />
+
+                {/* Catch all route */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Router>
+            </AppearanceProvider>
+          </AuthProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </GoogleOAuthProvider>
+  );
+}
+
+export default App;

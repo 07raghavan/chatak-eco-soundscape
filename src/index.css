@@ -1,0 +1,321 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Chatak Eco Acoustic Platform Design System */
+
+@layer base {
+  :root {
+    /* Core eco-acoustic color palette */
+    --background: 120 15% 98%;
+    --foreground: 158 64% 8%;
+
+    --card: 120 20% 99%;
+    --card-foreground: 158 64% 12%;
+
+    --popover: 120 20% 99%;
+    --popover-foreground: 158 64% 12%;
+
+    /* Forest primary colors */
+    --primary: 158 64% 15%;
+    --primary-foreground: 120 25% 98%;
+    --primary-glow: 158 45% 35%;
+
+    /* Coral accent colors */
+    --coral: 14 91% 65%;
+    --coral-foreground: 0 0% 100%;
+    --coral-glow: 14 100% 85%;
+
+    /* Nature secondary colors */
+    --secondary: 140 30% 92%;
+    --secondary-foreground: 158 64% 15%;
+
+    /* Earthy muted colors */
+    --muted: 135 15% 94%;
+    --muted-foreground: 135 8% 45%;
+
+    /* Moss accent colors */
+    --accent: 85 35% 88%;
+    --accent-foreground: 158 64% 20%;
+
+    /* Warning/destructive */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    /* Borders and inputs */
+    --border: 135 25% 88%;
+    --input: 135 25% 90%;
+    --ring: 158 64% 50%;
+
+    --radius: 0.75rem;
+
+    /* Gradients */
+    --gradient-hero: linear-gradient(135deg, hsl(158 64% 15%), hsl(140 55% 25%), hsl(120 45% 35%));
+    --gradient-coral: linear-gradient(135deg, hsl(14 91% 65%), hsl(25 85% 70%));
+    --gradient-nature: linear-gradient(180deg, hsl(140 30% 96%), hsl(135 25% 92%));
+    --gradient-forest: linear-gradient(45deg, hsl(158 64% 8%) 0%, hsl(140 55% 12%) 50%, hsl(120 45% 18%) 100%);
+    
+    /* Shadows */
+    --shadow-eco: 0 10px 40px -10px hsl(158 64% 15% / 0.2);
+    --shadow-coral: 0 8px 30px -8px hsl(14 91% 65% / 0.3);
+    --shadow-glow: 0 0 60px hsl(158 45% 35% / 0.4);
+
+    /* Transitions */
+    --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  .dark {
+    --background: 158 64% 4%;
+    --foreground: 120 25% 95%;
+
+    --card: 158 64% 6%;
+    --card-foreground: 120 25% 95%;
+
+    --popover: 158 64% 6%;
+    --popover-foreground: 120 25% 95%;
+
+    --primary: 158 45% 75%;
+    --primary-foreground: 158 64% 8%;
+    --primary-glow: 158 55% 65%;
+
+    --coral: 14 85% 70%;
+    --coral-foreground: 158 64% 8%;
+
+    --secondary: 158 30% 12%;
+    --secondary-foreground: 120 25% 95%;
+
+    --muted: 158 20% 10%;
+    --muted-foreground: 135 15% 65%;
+
+    --accent: 140 25% 18%;
+    --accent-foreground: 120 25% 95%;
+
+    --border: 158 30% 18%;
+    --input: 158 30% 18%;
+    --ring: 158 45% 60%;
+
+    --gradient-hero: linear-gradient(135deg, hsl(158 64% 8%), hsl(140 55% 15%), hsl(120 45% 22%));
+    --gradient-forest: linear-gradient(45deg, hsl(158 64% 4%) 0%, hsl(140 55% 8%) 50%, hsl(120 45% 12%) 100%);
+  }
+}
+
+/* Vertical marquee animation for image scroller */
+.vertical-marquee {
+  position: absolute;
+  inset: 0;
+  display: block;
+  animation: vertical-scroll 28s linear infinite;
+}
+
+@keyframes vertical-scroll {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+/* eco forest sway animation for background blades */
+@keyframes eco-sway {
+  0% { transform: rotate(-3deg); }
+  100% { transform: rotate(3deg); }
+}
+
+/* gentle drift for layered shapes */
+@keyframes eco-drift {
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(-20px); }
+}
+@keyframes eco-drift-slow {
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(-12px); }
+}
+@keyframes eco-drift-fast {
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(-28px); }
+}
+
+.animate-eco-drift { animation: eco-drift 18s ease-in-out infinite alternate; }
+.animate-eco-drift-slow { animation: eco-drift-slow 26s ease-in-out infinite alternate; }
+.animate-eco-drift-fast { animation: eco-drift-fast 12s ease-in-out infinite alternate; }
+
+/* global glass mode utility - applied via body.glass-mode */
+body.glass-mode .glass-card {
+  background-color: rgba(255,255,255,0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-color: rgba(255,255,255,0.3);
+}
+body.glass-mode .glass-nav {
+  background-color: rgba(255,255,255,0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top-color: rgba(255,255,255,0.3);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  /* Hero background animation */
+  .hero-bg {
+    background: var(--gradient-hero);
+    background-size: 400% 400%;
+    animation: gradient-shift 8s ease-in-out infinite;
+  }
+
+  /* Soundwave animation */
+  .soundwave {
+    background: linear-gradient(90deg, 
+      transparent 0%, 
+      hsl(var(--primary-glow) / 0.1) 25%, 
+      hsl(var(--coral) / 0.2) 50%, 
+      hsl(var(--primary-glow) / 0.1) 75%, 
+      transparent 100%);
+    background-size: 200% 100%;
+    animation: wave-flow 4s ease-in-out infinite;
+  }
+
+  /* Coral glow effect */
+  .coral-glow {
+    box-shadow: 0 0 30px hsl(var(--coral) / 0.3);
+    transition: var(--transition-smooth);
+  }
+
+  .coral-glow:hover {
+    box-shadow: 0 0 40px hsl(var(--coral) / 0.5);
+    transform: translateY(-2px);
+  }
+
+  /* Forest depth effect */
+  .forest-depth {
+    background: var(--gradient-forest);
+    position: relative;
+  }
+
+  .forest-depth::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 0%, hsl(var(--primary-glow) / 0.1) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  /* Feature cards */
+  .feature-card {
+    background: var(--gradient-nature);
+    border: 1px solid hsl(var(--border));
+    transition: var(--transition-smooth);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 2px;
+    background: var(--gradient-coral);
+    transition: var(--transition-smooth);
+  }
+
+  .feature-card:hover::before {
+    left: 0;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-eco);
+  }
+}
+
+@layer utilities {
+  /* Typography utilities */
+  .text-hero {
+    @apply text-5xl md:text-7xl lg:text-8xl font-bold leading-tight tracking-tight;
+  }
+
+  .text-section-title {
+    @apply text-3xl md:text-4xl lg:text-5xl font-semibold leading-tight;
+  }
+
+  .text-feature-title {
+    @apply text-xl md:text-2xl font-semibold leading-tight;
+  }
+
+  /* Color utilities */
+  .text-coral {
+    color: hsl(var(--coral));
+  }
+
+  .bg-coral {
+    background-color: hsl(var(--coral));
+  }
+
+  .border-coral {
+    border-color: hsl(var(--coral));
+  }
+
+  /* Animation utilities */
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-pulse-slow {
+    animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
+
+/* Keyframes */
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes wave-flow {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
