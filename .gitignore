@@ -59,6 +59,10 @@ __pycache__/
 
 # FFmpeg
 ffmpeg.zip
+backend/bin/ffmpeg.exe
+backend/bin/ffplay.exe
+backend/bin/ffprobe.exe
+*.exe
 
 # Temporary and deployment scripts
 extra.txt
