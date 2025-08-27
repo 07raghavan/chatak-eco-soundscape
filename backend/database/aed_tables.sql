@@ -5,8 +5,10 @@ CREATE TABLE IF NOT EXISTS aed_events (
   id SERIAL PRIMARY KEY,
   recording_id INT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
   segment_id INT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
-  start_ms BIGINT NOT NULL,
-  end_ms BIGINT NOT NULL,
+  start_ms BIGINT NOT NULL,                    -- RELATIVE timing (0ms to segment duration)
+  end_ms BIGINT NOT NULL,                      -- RELATIVE timing (0ms to segment duration)
+  absolute_start_ms BIGINT,                    -- ABSOLUTE recording timing (for reference)
+  absolute_end_ms BIGINT,                      -- ABSOLUTE recording timing (for reference)
   f_min_hz REAL,
   f_max_hz REAL,
   peak_freq_hz REAL,
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS aed_events (
 CREATE INDEX IF NOT EXISTS idx_aed_events_recording_id ON aed_events(recording_id);
 CREATE INDEX IF NOT EXISTS idx_aed_events_segment_id ON aed_events(segment_id);
 CREATE INDEX IF NOT EXISTS idx_aed_events_time ON aed_events(recording_id, start_ms);
+CREATE INDEX IF NOT EXISTS idx_aed_events_absolute_time ON aed_events(recording_id, absolute_start_ms);
 
 -- Optional manual tagging table
 CREATE TABLE IF NOT EXISTS aed_event_tags (

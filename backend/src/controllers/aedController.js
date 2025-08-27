@@ -505,3 +505,133 @@ export const triggerDeduplication = async (req, res) => {
   }
 };
 
+/**
+ * Get signed URL for AED audio snippet
+ * NEW: Generates S3 signed URLs for secure audio snippet access
+ */
+export const getAudioSnippetUrl = async (req, res) => {
+  try {
+    const { snippetKey } = req.params;
+    
+    if (!snippetKey) {
+      return res.status(400).json({ error: 'Snippet key is required' });
+    }
+    
+    console.log(`🎵 Generating signed URL for audio snippet: ${snippetKey}`);
+    
+    // Import S3 utilities
+    const { getAudioSnippetUrl: generateSignedUrl } = await import('../config/s3.js');
+    
+    // Generate signed URL
+    const signedUrl = await generateSignedUrl(snippetKey);
+    
+    console.log(`✅ Generated signed URL for snippet: ${snippetKey}`);
+    
+    res.json({
+      success: true,
+      snippetKey,
+      signedUrl,
+      expiresIn: 3600 // 1 hour
+    });
+    
+  } catch (error) {
+    console.error(`❌ Error generating signed URL for audio snippet:`, error);
+    res.status(500).json({ error: 'Failed to generate signed URL for audio snippet' });
+  }
+};
+
+/**
+ * Run optimized AED for all segments (development/testing endpoint)
+ * This endpoint works with all segments, not just approved ones
+ */
+export const runOptimizedAEDForAllSegments = async (req, res) => {
+  try {
+    const { recordingId } = req.params;
+    const userId = req.user.id;
+    const { config = {} } = req.body || {};
+
+    // Verify ownership
+    const rec = await db.query(`
+      SELECT r.id, p.user_id as owner_id, r.duration_seconds
+      FROM recordings r
+      JOIN projects p ON r.project_id = p.id
+      WHERE r.id = :recordingId
+    `, { replacements: { recordingId }, type: QueryTypes.SELECT });
+    if (rec.length === 0) return res.status(404).json({ error: 'Recording not found' });
+    if (rec[0].owner_id !== userId) return res.status(403).json({ error: 'Access denied' });
+
+    // Fetch ALL segments for this recording (not just approved ones)
+    const allSegments = await db.query(`
+      SELECT s.*
+      FROM segments s
+      WHERE s.recording_id = :recordingId
+      ORDER BY s.start_ms ASC
+    `, { replacements: { recordingId }, type: QueryTypes.SELECT });
+
+    if (allSegments.length === 0) {
+      return res.status(400).json({ error: 'No segments found for this recording. Please run segmentation first.' });
+    }
+
+    console.log(`🚀 Starting optimized AED for recording ${recordingId} with ${allSegments.length} segments (all segments)`);
+
+    // Set response headers for streaming
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    // Clear existing events for this recording
+    await db.query(`
+      DELETE FROM aed_events WHERE recording_id = :recordingId
+    `, { replacements: { recordingId }, type: QueryTypes.DELETE });
+
+    // Create optimized detector with progress callback
+    const detector = new OptimizedAED(config);
+    detector.setProgressCallback((percent, message) => {
+      res.write(`data: ${JSON.stringify({ progress: percent, message })}\n\n`);
+    });
+
+    try {
+      // Run optimized AED
+      const events = await detector.runForRecording(recordingId, allSegments);
+
+      // Calculate coverage statistics
+      const totalRecordingDuration = (rec[0].duration_seconds || 0) * 1000;
+      const processedDuration = allSegments.reduce((sum, seg) => sum + seg.duration_ms, 0);
+      const coveragePercent = totalRecordingDuration > 0 ? (processedDuration / totalRecordingDuration) * 100 : 0;
+
+      const result = {
+        message: 'Optimized AED completed successfully (all segments)',
+        recording_id: recordingId,
+        events_detected: events.length,
+        segments_processed: allSegments.length,
+        coverage_percent: Math.round(coveragePercent * 100) / 100,
+        total_duration_ms: totalRecordingDuration,
+        processed_duration_ms: processedDuration,
+        method: 'optimized-v1-all-segments',
+        processing_time_estimate: `~${Math.ceil(allSegments.length * 0.5)}s`,
+        events: events
+      };
+
+      // Send final result
+      res.write(`data: ${JSON.stringify({ complete: true, result })}\n\n`);
+      res.end();
+
+    } catch (processingError) {
+      res.write(`data: ${JSON.stringify({ error: 'Processing failed: ' + processingError.message })}\n\n`);
+      res.end();
+    }
+
+  } catch (err) {
+    console.error('runOptimizedAEDForAllSegments error', err);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Failed to run optimized AED: ' + err.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: 'Setup failed: ' + err.message })}\n\n`);
+      res.end();
+    }
+  }
+};
+

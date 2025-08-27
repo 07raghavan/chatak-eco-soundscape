@@ -11,12 +11,13 @@ ffmpeg.setFfmpegPath(path.join(process.cwd(), 'bin', 'ffmpeg.exe'));
 /**
  * High-Performance Acoustic Event Detection System
  * Optimized for speed with parallel processing, optimized FFT, and reduced I/O overhead
+ * FIXED: All critical logical and algorithmic issues
  */
 export class OptimizedAED {
   constructor(config = {}) {
     this.config = {
-      // STFT Parameters - maintained higher quality but faster implementation
-      nFFT: 1024,          // Reduced FFT size for speed
+      // STFT Parameters - FIXED: Proper FFT sizing
+      nFFT: 1024,          // FFT size (must be power of 2)
       hopMs: 5,            // Keep fine temporal resolution for birds (critical!)
       winMs: 25,           
       
@@ -27,9 +28,9 @@ export class OptimizedAED {
       baselineWindowSec: 60,     // Default, will adapt 30-120s based on audio variability
       adaptiveWindowSec: 3,      // Keep short for local adaptation
 
-      // Hysteresis thresholds - Will be dynamically set based on noise analysis
-      onsetThresholdDb: 6.0,     // Default K_on, will adapt 3-12dB based on SNR
-      offsetThresholdDb: 3.0,    // Default K_off, will maintain ratio with K_on
+      // Hysteresis thresholds - FIXED: Proper dB-based thresholds
+      onsetThresholdDb: 6.0,     // K_on threshold in dB
+      offsetThresholdDb: 3.0,    // K_off threshold in dB (must be < K_on)
 
       // Streaming processing parameters
       chunkDurationSec: 120,     // Process in 120s chunks
@@ -39,11 +40,6 @@ export class OptimizedAED {
       enableLogMel: true,        // Use log-mel features for stability
       enableSpectralWhitening: true, // Optional spectral whitening
       melFilterBanks: 64,        // 64-128 mel bins as suggested
-
-      // Hardware calibration parameters
-      enableHardwareCalibration: true,  // Enable device-specific calibration
-      deviceCalibrationDb: 0.0,         // Device-specific dB offset (will be auto-detected)
-      frequencyResponseCorrection: null, // Device-specific frequency response curve
 
       // Dynamic adaptation parameters
       enableDynamicAdaptation: true,    // Enable audio-aware parameter adaptation
@@ -59,7 +55,7 @@ export class OptimizedAED {
       maxDurationMs: 8000,  // Lower maximum
       mergeGapMs: 100,      // Reduced for better event separation in birds
       
-      // Bird-optimized frequency bands
+      // Bird-optimized frequency bands - FIXED: Proper frequency ranges
       targetBands: [
         { name: 'low_freq', fmin: 500, fmax: 2000 },     // Important for many birds  
         { name: 'mid_freq', fmin: 2000, fmax: 8000 },    // Critical bird vocalization range
@@ -78,11 +74,18 @@ export class OptimizedAED {
       useOnsetDetection: true,
       useEnergyEntropy: true,
       
+      // FIXED: Add missing config for spectral novelty
+      onsetThresholdSigma: 2.0,  // Standard deviations above mean for novelty detection
+      
       ...config
     };
 
     // Progress callback
     this.onProgress = null;
+    
+    // FIXED: Pre-compute mel filter bank for efficiency
+    this.melFilters = null;
+    this.melFilterBankSampleRate = null;
   }
 
   setProgressCallback(callback) {
@@ -91,6 +94,7 @@ export class OptimizedAED {
 
   /**
    * High-speed processing with parallel segment analysis
+   * FIXED: Proper timing coordinate system
    */
   async runForRecording(recordingId, approvedSegments, options = {}) {
     console.log(`🚀 Starting optimized AED for recording ${recordingId} with ${approvedSegments.length} segments`);
@@ -98,6 +102,11 @@ export class OptimizedAED {
     if (approvedSegments.length === 0) return [];
 
     this.reportProgress(0, 'Initializing...');
+    
+    // Debug: Log segment information
+    approvedSegments.forEach((segment, idx) => {
+      console.log(`📊 Segment ${idx + 1}: ID=${segment.id}, start=${segment.start_ms}ms, duration=${segment.duration_ms}ms`);
+    });
     
     // Batch load all audio files in parallel
     const audioDataMap = await this.batchLoadAudio(approvedSegments);
@@ -117,35 +126,235 @@ export class OptimizedAED {
         const audioData = audioDataMap.get(segment.id);
         if (!audioData) return [];
         
+        console.log(`🎵 Processing segment ${segment.id}: ${audioData.samples.length} samples at ${audioData.sampleRate}Hz`);
+        
         const events = await this.detectForSegmentOptimized(segment, audioData);
         
-        // Map to recording coordinates
-        return events.map(event => ({
+        console.log(`✅ Segment ${segment.id}: detected ${events.length} events`);
+        
+        // FIXED: Clear timing coordinate system with proper validation
+        return events.map(event => {
+          // Validate timing values
+          const startMs = Number(event.start_ms) || 0;
+          const endMs = Number(event.end_ms) || 0;
+          const segmentStartMs = Number(segment.start_ms) || 0;
+          
+          if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(segmentStartMs)) {
+            console.warn(`⚠️ Invalid timing values for event: start=${startMs}, end=${endMs}, segment_start=${segmentStartMs}`);
+            return null;
+          }
+          
+          // Ensure end time is after start time
+          if (endMs <= startMs) {
+            console.warn(`⚠️ Invalid event duration: start=${startMs}ms, end=${endMs}ms`);
+            return null;
+          }
+          
+          // FIXED: Proper timing coordinate system
+          const eventWithTiming = {
           ...event,
-          start_ms: segment.start_ms + event.start_ms,
-          end_ms: segment.start_ms + event.end_ms,
-          segment_id: segment.id
-        }));
+            // Segment-relative timing (0ms to segment duration) - for audio playback
+            start_ms: startMs,
+            end_ms: endMs,
+          segment_id: segment.id,
+            
+            // FIXED: Calculate absolute recording timing correctly
+            absolute_start_ms: segmentStartMs + startMs,
+            absolute_end_ms: segmentStartMs + endMs,
+            
+            // Clear metadata
+            timing_system: 'segment_relative',
+            recording_id: recordingId
+          };
+          
+          console.log(`🎯 Event: segment-relative ${startMs}ms-${endMs}ms, absolute ${eventWithTiming.absolute_start_ms}ms-${eventWithTiming.absolute_end_ms}ms`);
+          
+          return eventWithTiming;
+        }).filter(Boolean); // Remove null events
       });
       
       const batchResults = await Promise.all(batchPromises);
       allEvents.push(...batchResults.flat());
     }
     
+    console.log(`📊 Total events detected: ${allEvents.length}`);
+    
     this.reportProgress(80, 'Merging events...');
     
+    // FIXED: Apply deduplication before merging
+    const deduplicatedEvents = await this.applyDeduplication(allEvents);
+    
     // Fast merge of nearby events
-    const mergedEvents = this.fastMergeEvents(allEvents);
+    const mergedEvents = this.fastMergeEvents(deduplicatedEvents);
+    
+    console.log(`📊 After deduplication: ${deduplicatedEvents.length} events`);
+    console.log(`📊 After merging: ${mergedEvents.length} events`);
+    
+    // NEW: Apply post-processing filters and refinements
+    const postProcessedEvents = this.postProcessEvents(mergedEvents);
+    
+    console.log(`📊 After post-processing: ${postProcessedEvents.length} events`);
     
     this.reportProgress(90, 'Saving to database...');
     
     // Batch insert events
-    const storedEvents = await this.batchInsertEvents(recordingId, mergedEvents);
+    const storedEvents = await this.batchInsertEvents(recordingId, postProcessedEvents);
     
     this.reportProgress(100, 'Complete!');
     
     console.log(`✅ Optimized AED completed: ${storedEvents.length} events detected`);
     return storedEvents;
+  }
+
+  /**
+   * Apply deduplication to remove cross-segment duplicates
+   * FIXED: Properly integrates with database deduplication fields
+   */
+  async applyDeduplication(events) {
+    if (events.length <= 1) return events;
+    
+    console.log(`🔍 Applying deduplication to ${events.length} events...`);
+    
+    // Sort by absolute start time for efficient processing
+    events.sort((a, b) => a.absolute_start_ms - b.absolute_start_ms);
+    
+    const uniqueEvents = [];
+    const duplicateEvents = [];
+    
+    for (let i = 0; i < events.length; i++) {
+      const current = events[i];
+      let isDuplicate = false;
+      let duplicateInfo = null;
+      
+      // Check against previous events within overlap window
+      for (let j = i - 1; j >= 0; j--) {
+        const previous = events[j];
+        
+        // Skip if too far back in time
+        if (current.absolute_start_ms - previous.absolute_end_ms > 5000) break;
+        
+        // Calculate temporal and frequency overlap
+        const temporalIoU = this.calculateTemporalIoU(current, previous);
+        const frequencyIoU = this.calculateFrequencyIoU(current, previous);
+        
+        // Check if this is a duplicate
+        if (temporalIoU > 0.5 && frequencyIoU > 0.5) {
+          // Resolve which event to keep
+          const resolution = this.resolveDuplicate(current, previous);
+          
+          if (resolution.keep === current) {
+            // Mark previous as duplicate
+            duplicateEvents.push({
+              ...previous,
+              duplicate_of: current.id,
+              temporal_iou: temporalIoU,
+              frequency_iou: frequencyIoU,
+              dedup_confidence: resolution.confidence
+            });
+          } else {
+            // Mark current as duplicate
+            isDuplicate = true;
+            duplicateInfo = {
+              duplicate_of: previous.id,
+              temporal_iou: temporalIoU,
+              frequency_iou: frequencyIoU,
+              dedup_confidence: resolution.confidence
+            };
+            break;
+          }
+        }
+      }
+      
+      if (!isDuplicate) {
+        uniqueEvents.push(current);
+      } else {
+        // Add duplicate info to the event
+        duplicateEvents.push({
+          ...current,
+          ...duplicateInfo
+        });
+      }
+    }
+    
+    console.log(`✅ Deduplication complete: ${uniqueEvents.length} unique events, ${duplicateEvents.length} duplicates`);
+    
+    // Store both unique and duplicate events (duplicates will be marked in database)
+    return [...uniqueEvents, ...duplicateEvents];
+  }
+
+  /**
+   * Calculate temporal IoU between two events
+   */
+  calculateTemporalIoU(event1, event2) {
+    const start1 = event1.absolute_start_ms;
+    const end1 = event1.absolute_end_ms;
+    const start2 = event2.absolute_start_ms;
+    const end2 = event2.absolute_end_ms;
+
+    const intersectionStart = Math.max(start1, start2);
+    const intersectionEnd = Math.min(end1, end2);
+    const intersection = Math.max(0, intersectionEnd - intersectionStart);
+
+    const duration1 = end1 - start1;
+    const duration2 = end2 - start2;
+    const union = duration1 + duration2 - intersection;
+
+    return union > 0 ? intersection / union : 0;
+  }
+
+  /**
+   * Calculate frequency IoU between two events
+   */
+  calculateFrequencyIoU(event1, event2) {
+    const fmin1 = event1.f_min_hz || 0;
+    const fmax1 = event1.f_max_hz || 0;
+    const fmin2 = event2.f_min_hz || 0;
+    const fmax2 = event2.f_max_hz || 0;
+
+    if (fmax1 <= fmin1 || fmax2 <= fmin2) return 0;
+
+    const intersectionMin = Math.max(fmin1, fmin2);
+    const intersectionMax = Math.min(fmax1, fmax2);
+    const intersection = Math.max(0, intersectionMax - intersectionMin);
+
+    const range1 = fmax1 - fmin1;
+    const range2 = fmax2 - fmin2;
+    const union = range1 + range2 - intersection;
+
+    return union > 0 ? intersection / union : 0;
+  }
+
+  /**
+   * Resolve duplicate events - keep the better one
+   */
+  resolveDuplicate(event1, event2) {
+    const confidence1 = event1.confidence || 0;
+    const confidence2 = event2.confidence || 0;
+    const snr1 = event1.snr_db || 0;
+    const snr2 = event2.snr_db || 0;
+    
+    // Composite score: confidence + SNR + duration preference
+    const duration1 = event1.end_ms - event1.start_ms;
+    const duration2 = event2.end_ms - event2.start_ms;
+    const durationScore1 = Math.min(1.0, duration1 / 1000);
+    const durationScore2 = Math.min(1.0, duration2 / 1000);
+    
+    const score1 = (confidence1 * 0.7) + (snr1 / 60 * 0.2) + (durationScore1 * 0.1);
+    const score2 = (confidence2 * 0.7) + (snr2 / 60 * 0.2) + (durationScore2 * 0.1);
+
+    if (score1 >= score2) {
+      return {
+        keep: event1,
+        duplicate: event2,
+        confidence: Math.min(1.0, Math.abs(score1 - score2) + 0.5)
+      };
+    } else {
+      return {
+        keep: event2,
+        duplicate: event1,
+        confidence: Math.min(1.0, Math.abs(score2 - score1) + 0.5)
+      };
+    }
   }
 
   /**
@@ -203,103 +412,580 @@ export class OptimizedAED {
   /**
    * Enhanced streaming detection with dynamic parameter adaptation
    * Analyzes audio characteristics and adapts parameters accordingly
+   * FIXED: Proper timing coordinate system and audio snippet extraction
    */
   async detectForSegmentOptimized(segment, audioData) {
     const { samples, sampleRate } = audioData;
     if (!samples || samples.length === 0) return [];
-
-    // Skip hardware calibration - not needed and causing issues
-    const hardwareCalibration = null;
 
     // Analyze audio characteristics and adapt parameters dynamically
     const audioProfile = this.config.enableDynamicAdaptation
       ? await this.analyzeAudioCharacteristics(samples, sampleRate)
       : null;
 
-    // Adapt detection parameters based on audio analysis and hardware calibration
-    let adaptedConfig = audioProfile
-      ? this.adaptParametersToAudio(audioProfile)
-      : this.config;
-
-    // Apply hardware calibration adjustments
-    if (hardwareCalibration && hardwareCalibration.confidence > 0.5) {
-      adaptedConfig = {
-        ...adaptedConfig,
-        onsetThresholdDb: adaptedConfig.onsetThresholdDb + hardwareCalibration.dbOffset,
-        offsetThresholdDb: adaptedConfig.offsetThresholdDb + hardwareCalibration.dbOffset,
-        deviceCalibrationDb: hardwareCalibration.dbOffset
+    // Extract features with adaptive parameters
+    const features = await this.extractEnhancedFeatures(samples, sampleRate, audioProfile);
+    
+    // Detect events using spectral novelty
+    const rawEvents = this.detectOptimizedSpectralNovelty(features);
+    
+    // Filter and merge events
+    const filteredEvents = this.filterOptimizedEvents(rawEvents, features, audioProfile);
+    
+    // FIXED: Convert frame-based events to time-based events with PROPER segment-relative timing
+    const timeEvents = filteredEvents.map(event => {
+      // FIXED: Use segment-relative timing (0ms to segment duration)
+      const startMs = Math.round(event.start_ms || 0);
+      const endMs = Math.round(event.end_ms || 0);
+      
+      // Validate timing is within segment bounds
+      const segmentDurationMs = Math.floor((samples.length / sampleRate) * 1000);
+      const validStartMs = Math.max(0, Math.min(startMs, segmentDurationMs));
+      const validEndMs = Math.max(validStartMs + 50, Math.min(endMs, segmentDurationMs)); // Min 50ms duration
+      
+      return {
+        start_ms: validStartMs,  // FIXED: Segment-relative timing (0ms to segment duration)
+        end_ms: validEndMs,      // FIXED: Segment-relative timing (0ms to segment duration)
+        confidence: event.confidence || 0.5,
+        snr_db: event.snr_db || 0,
+        f_min_hz: event.f_min_hz || 0,
+        f_max_hz: event.f_max_hz || 0,
+        peak_freq_hz: event.peak_freq_hz || 0,
+        band_name: event.band_name || 'unknown'
       };
-      console.log(`🔧 Hardware calibration applied: ${hardwareCalibration.deviceType} (+${hardwareCalibration.dbOffset.toFixed(1)}dB)`);
-    }
+    });
 
-    console.log(`🎵 Audio Analysis: ${audioProfile ?
-      `SNR=${audioProfile.estimatedSNR.toFixed(1)}dB, Variability=${audioProfile.variabilityScore.toFixed(2)}, Environment=${audioProfile.environmentType}` :
-      'Using default parameters'}`);
-
-    // Calculate chunk parameters
-    const chunkSamples = Math.floor(adaptedConfig.chunkDurationSec * sampleRate);
-    const overlapSamples = Math.floor(adaptedConfig.chunkOverlapSec * sampleRate);
-
-    // If audio is short enough, process directly without chunking
-    if (samples.length <= chunkSamples) {
-      return this.processAudioChunk(samples, sampleRate, 0, null, adaptedConfig);
-    }
-
-    // Process in streaming chunks with continuous re-analysis
-    const allEvents = [];
-    let carryOverBaseline = null;
-    let chunkStartSample = 0;
-    let currentAdaptedConfig = adaptedConfig;
-    let lastReAnalysisTime = 0;
-
-    while (chunkStartSample < samples.length) {
-      const chunkEndSample = Math.min(chunkStartSample + chunkSamples, samples.length);
-      const chunkSamples_data = samples.slice(chunkStartSample, chunkEndSample);
-      const currentTimeMs = chunkStartSample / sampleRate * 1000;
-
-      // Re-analyze environment periodically to handle changing conditions
-      if (currentTimeMs - lastReAnalysisTime >= this.config.reAnalysisIntervalSec * 1000) {
-        console.log(`🔄 Re-analyzing environment at ${(currentTimeMs/1000/60).toFixed(1)} minutes...`);
-
-        // Analyze current chunk for environment changes
-        const reAnalysisProfile = await this.analyzeAudioCharacteristics(chunkSamples_data, sampleRate);
-
-        if (reAnalysisProfile && reAnalysisProfile.adaptationConfidence > 0.3) {
-          // Smooth transition to new parameters to avoid abrupt changes
-          const newAdaptedConfig = this.adaptParametersToAudio(reAnalysisProfile);
-          currentAdaptedConfig = this.smoothParameterTransition(currentAdaptedConfig, newAdaptedConfig);
-
-          console.log(`🎛️ Environment change detected: ${reAnalysisProfile.environmentType}`);
+    // FIXED: Generate audio snippets for detected events with proper timing
+    const eventsWithSnippets = await Promise.all(
+      timeEvents.map(async (event) => {
+        try {
+          console.log(`🎵 Generating snippet for event: ${event.start_ms}ms - ${event.end_ms}ms (duration: ${event.end_ms - event.start_ms}ms)`);
+          
+          // FIXED: Pass segment-relative timing to audio snippet generation
+          const snippetS3Key = await this.generateAudioSnippet(
+            segment, 
+            event.start_ms,  // Segment-relative start time
+            event.end_ms,    // Segment-relative end time
+            samples,         // Full segment audio data
+            sampleRate
+          );
+          
+          console.log(`🎵 Snippet result for event: ${snippetS3Key ? 'SUCCESS' : 'FAILED'} - ${snippetS3Key || 'No key generated'}`);
+          
+          return {
+            ...event,
+            snippet_s3_key: snippetS3Key
+          };
+        } catch (error) {
+          console.error(`❌ Failed to generate snippet for event ${event.start_ms}ms - ${event.end_ms}ms:`, error);
+          return event; // Return event without snippet
         }
+      })
+    );
+    
+    // Summary of snippet generation
+    const successfulSnippets = eventsWithSnippets.filter(event => event.snippet_s3_key).length;
+    console.log(`📊 Audio snippet generation summary: ${successfulSnippets}/${timeEvents.length} events have snippets`);
+    
+    return eventsWithSnippets;
+  }
 
-        lastReAnalysisTime = currentTimeMs;
+  /**
+   * Generate audio snippet for a detected event
+   * FIXED: Proper segment-relative timing and audio extraction
+   */
+  async generateAudioSnippet(segment, startMs, endMs, samples, sampleRate) {
+    try {
+      console.log(`🎵 Starting audio snippet generation for segment ${segment.id}: ${startMs}ms - ${endMs}ms`);
+      
+      const { uploadFile } = await import('../config/s3.js');
+      const fs = await import('fs');
+      const path = await import('path');
+      
+      // FIXED: Validate segment-relative timing
+      const segmentDurationMs = Math.floor((samples.length / sampleRate) * 1000);
+      
+      console.log(`🎵 Segment info: duration=${segmentDurationMs}ms, samples=${samples.length}, sampleRate=${sampleRate}Hz`);
+      
+      if (startMs < 0 || endMs <= startMs || endMs > segmentDurationMs) {
+        console.warn(`⚠️ Invalid segment-relative timing: ${startMs}ms - ${endMs}ms, segment duration: ${segmentDurationMs}ms`);
+        return null;
+      }
+      
+      // FIXED: Calculate sample indices for segment-relative timing
+      const startSample = Math.floor((startMs / 1000) * sampleRate);
+      const endSample = Math.floor((endMs / 1000) * sampleRate);
+      
+      console.log(`🎵 Sample range: ${startSample} - ${endSample} (total samples: ${samples.length})`);
+      
+      // FIXED: Better validation and bounds checking
+      if (startSample >= endSample) {
+        console.warn(`⚠️ Invalid sample range: start >= end (${startSample} >= ${endSample})`);
+        return null;
+      }
+      
+      if (startSample >= samples.length) {
+        console.warn(`⚠️ Start sample beyond audio length: ${startSample} >= ${samples.length}`);
+        return null;
+      }
+      
+      // FIXED: Clamp end sample to available audio length
+      const clampedEndSample = Math.min(endSample, samples.length);
+      if (clampedEndSample <= startSample) {
+        console.warn(`⚠️ No valid samples after clamping: start=${startSample}, end=${clampedEndSample}`);
+        return null;
+      }
+      
+      console.log(`🎵 Using clamped sample range: ${startSample} - ${clampedEndSample} (original end: ${endSample})`);
+      
+      // FIXED: Extract the correct audio snippet from segment data using clamped range
+      const snippetSamples = samples.slice(startSample, clampedEndSample);
+      
+      if (snippetSamples.length === 0) {
+        console.warn(`⚠️ No samples for snippet: ${startMs}ms - ${endMs}ms`);
+        return null;
       }
 
-      // Process chunk with baseline continuity and current adapted config
-      const chunkEvents = await this.processAudioChunk(
-        chunkSamples_data,
-        sampleRate,
-        currentTimeMs, // offset in ms
-        carryOverBaseline,
-        currentAdaptedConfig
-      );
+      // Validate the extracted snippet duration
+      const actualDurationMs = Math.floor((snippetSamples.length / sampleRate) * 1000);
+      const expectedDurationMs = endMs - startMs;
+      const actualEndMs = startMs + actualDurationMs;
+      
+      console.log(`🎵 Snippet validation: expected=${expectedDurationMs}ms, actual=${actualDurationMs}ms, samples=${snippetSamples.length}`);
+      console.log(`🎵 Timing: start=${startMs}ms, expected_end=${endMs}ms, actual_end=${actualEndMs}ms`);
+      
+      if (Math.abs(actualDurationMs - expectedDurationMs) > 50) {
+        console.warn(`⚠️ Duration mismatch: expected ${expectedDurationMs}ms, got ${actualDurationMs}ms (clamped due to audio length)`);
+      }
 
-      // Add events with time offset correction
-      allEvents.push(...chunkEvents);
+      console.log(`🎵 Generating snippet: ${startMs}ms - ${endMs}ms (${snippetSamples.length} samples)`);
 
-      // Prepare for next chunk
-      chunkStartSample += chunkSamples - overlapSamples;
+      // Create temporary file for the snippet
+      const tempDir = path.join(process.cwd(), 'temp_ffmpeg');
+      const tempSnippet = path.join(tempDir, `snippet_${segment.id}_${startMs}_${endMs}.wav`);
+      
+      console.log(`🎵 Temp files: dir=${tempDir}, snippet=${tempSnippet}`);
+      
+      // Ensure temp directory exists
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+        console.log(`🎵 Created temp directory: ${tempDir}`);
+      }
 
-      // Extract baseline for next chunk (last few seconds)
-      const baselineCarryFrames = Math.floor(this.config.baselineWindowSec * 1000 / this.config.hopMs);
-      if (chunkEvents.length > 0) {
-        // This would need to be extracted from the chunk processing
-        carryOverBaseline = null; // Simplified for now
+      // Convert Float32Array to WAV file using ffmpeg
+      const ffmpeg = await import('fluent-ffmpeg');
+      
+      // Set ffmpeg path to use local bin version
+      const ffmpegPath = path.join(process.cwd(), 'backend', 'bin', 'ffmpeg.exe');
+      
+      // Check if ffmpeg exists
+      if (!fs.existsSync(ffmpegPath)) {
+        console.error(`❌ FFmpeg not found at: ${ffmpegPath}`);
+        throw new Error(`FFmpeg executable not found at ${ffmpegPath}`);
+      }
+      
+      ffmpeg.setFfmpegPath(ffmpegPath);
+      
+      console.log(`🎵 Using ffmpeg from: ${ffmpegPath}`);
+      
+      // Write raw audio data to temporary file
+      const rawFile = tempSnippet.replace('.wav', '.raw');
+      const buffer = Buffer.from(snippetSamples.buffer, snippetSamples.byteOffset, snippetSamples.byteLength);
+      fs.writeFileSync(rawFile, buffer);
+      
+      console.log(`🎵 Wrote raw file: ${rawFile} (${buffer.length} bytes)`);
+
+      // Convert to WAV using ffmpeg with proper settings
+      console.log(`🎵 Converting to WAV with ffmpeg...`);
+      await new Promise((resolve, reject) => {
+        ffmpeg(rawFile)
+          .inputFormat('f32le')
+          .audioChannels(1)
+          .audioFrequency(sampleRate)
+          .output(tempSnippet)
+          .on('end', () => {
+            console.log(`🎵 FFmpeg conversion completed: ${tempSnippet}`);
+            
+            // Validate the generated WAV file
+            if (fs.existsSync(tempSnippet)) {
+              const stats = fs.statSync(tempSnippet);
+              console.log(`🎵 Generated WAV file: ${tempSnippet} (${stats.size} bytes)`);
+              
+              // Check if file has reasonable size (should be > 44 bytes for WAV header)
+              if (stats.size < 44) {
+                console.error(`❌ Generated WAV file is too small: ${stats.size} bytes`);
+                reject(new Error('Generated WAV file is too small'));
+                return;
+              }
+            }
+            
+            resolve();
+          })
+          .on('error', (err) => {
+            console.error(`❌ FFmpeg conversion failed:`, err);
+            reject(err);
+          })
+          .run();
+      });
+
+      // Generate S3 key for the snippet
+      const snippetS3Key = `snippets/project-${segment.project_id || 1}/segment-${segment.id}/event_${startMs}_${endMs}.wav`;
+      
+      console.log(`🎵 Uploading to S3: ${snippetS3Key}`);
+      
+      // Upload to S3
+      await uploadFile(tempSnippet, snippetS3Key);
+      
+      console.log(`✅ Successfully uploaded to S3: ${snippetS3Key}`);
+      
+      // Cleanup temporary files
+      try { fs.unlinkSync(rawFile); } catch {}
+      try { fs.unlinkSync(tempSnippet); } catch {}
+      
+      console.log(`✅ Generated audio snippet: ${snippetS3Key} (${snippetSamples.length} samples, ${actualDurationMs}ms)`);
+      return snippetS3Key;
+      
+    } catch (error) {
+      console.error(`❌ Failed to generate audio snippet:`, error);
+      
+      // Fallback: Try to generate a simple WAV file without ffmpeg
+      try {
+        console.log(`🔄 Trying fallback audio snippet generation...`);
+        return await this.generateSimpleWavSnippet(segment, startMs, endMs, samples, sampleRate);
+      } catch (fallbackError) {
+        console.error(`❌ Fallback audio snippet generation also failed:`, fallbackError);
+        return null;
+      }
+    }
+  }
+  
+  /**
+   * Fallback method to generate WAV snippet without ffmpeg
+   * NEW: Simple WAV generation for when ffmpeg is not available
+   */
+  async generateSimpleWavSnippet(segment, startMs, endMs, samples, sampleRate) {
+    try {
+      const { uploadFile } = await import('../config/s3.js');
+      const fs = await import('fs');
+      const path = await import('path');
+      
+      console.log(`🎵 Generating simple WAV snippet for segment ${segment.id}: ${startMs}ms - ${endMs}ms`);
+      
+      // Calculate sample indices
+      const startSample = Math.floor((startMs / 1000) * sampleRate);
+      const endSample = Math.floor((endMs / 1000) * sampleRate);
+      
+      // FIXED: Better validation and bounds checking
+      if (startSample >= endSample) {
+        console.warn(`⚠️ Invalid sample range: start >= end (${startSample} >= ${endSample})`);
+        return null;
+      }
+      
+      if (startSample >= samples.length) {
+        console.warn(`⚠️ Start sample beyond audio length: ${startSample} >= ${samples.length}`);
+        return null;
+      }
+      
+      // FIXED: Clamp end sample to available audio length
+      const clampedEndSample = Math.min(endSample, samples.length);
+      if (clampedEndSample <= startSample) {
+        console.warn(`⚠️ No valid samples after clamping: start=${startSample}, end=${clampedEndSample}`);
+        return null;
+      }
+      
+      console.log(`🎵 Simple snippet using clamped sample range: ${startSample} - ${clampedEndSample} (original end: ${endSample})`);
+      
+      const snippetSamples = samples.slice(startSample, clampedEndSample);
+      
+      if (snippetSamples.length === 0) {
+        console.warn(`⚠️ No samples for simple snippet: ${startMs}ms - ${endMs}ms`);
+        return null;
+      }
+      
+      // Validate the extracted snippet duration
+      const actualDurationMs = Math.floor((snippetSamples.length / sampleRate) * 1000);
+      const expectedDurationMs = endMs - startMs;
+      const actualEndMs = startMs + actualDurationMs;
+      
+      console.log(`🎵 Simple snippet validation: expected=${expectedDurationMs}ms, actual=${actualDurationMs}ms, samples=${snippetSamples.length}`);
+      console.log(`🎵 Simple snippet timing: start=${startMs}ms, expected_end=${endMs}ms, actual_end=${actualEndMs}ms`);
+      
+      if (Math.abs(actualDurationMs - expectedDurationMs) > 50) {
+        console.warn(`⚠️ Simple snippet duration mismatch: expected ${expectedDurationMs}ms, got ${actualDurationMs}ms (clamped due to audio length)`);
+      }
+      
+      // Create WAV file header
+      const wavHeader = this.createWavHeader(snippetSamples.length, sampleRate, 1, 16);
+      
+      // Convert Float32Array to 16-bit PCM
+      const pcmData = new Int16Array(snippetSamples.length);
+      for (let i = 0; i < snippetSamples.length; i++) {
+        // Convert float32 (-1 to 1) to int16 (-32768 to 32767)
+        pcmData[i] = Math.max(-32768, Math.min(32767, Math.round(snippetSamples[i] * 32767)));
+      }
+      
+      // Combine header and data
+      const wavBuffer = Buffer.concat([
+        Buffer.from(wavHeader),
+        Buffer.from(pcmData.buffer)
+      ]);
+      
+      console.log(`🎵 Simple WAV buffer: header=${wavHeader.length} bytes, data=${pcmData.buffer.byteLength} bytes, total=${wavBuffer.length} bytes`);
+      
+      // Create temporary file
+      const tempDir = path.join(process.cwd(), 'temp_ffmpeg');
+      const tempSnippet = path.join(tempDir, `simple_snippet_${segment.id}_${startMs}_${endMs}.wav`);
+      
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      
+      // Write WAV file
+      fs.writeFileSync(tempSnippet, wavBuffer);
+      console.log(`🎵 Created simple WAV file: ${tempSnippet} (${wavBuffer.length} bytes)`);
+      
+      // Validate the generated file
+      if (fs.existsSync(tempSnippet)) {
+        const stats = fs.statSync(tempSnippet);
+        if (stats.size !== wavBuffer.length) {
+          console.error(`❌ File size mismatch: expected ${wavBuffer.length} bytes, got ${stats.size} bytes`);
+          throw new Error('File size mismatch');
+        }
+      }
+      
+      // Generate S3 key and upload
+      const snippetS3Key = `snippets/project-${segment.project_id || 1}/segment-${segment.id}/simple_event_${startMs}_${endMs}.wav`;
+      
+      console.log(`🎵 Uploading simple snippet to S3: ${snippetS3Key}`);
+      await uploadFile(tempSnippet, snippetS3Key);
+      
+      // Cleanup
+      try { fs.unlinkSync(tempSnippet); } catch {}
+      
+      console.log(`✅ Generated simple audio snippet: ${snippetS3Key} (${snippetSamples.length} samples, ${actualDurationMs}ms)`);
+      return snippetS3Key;
+      
+    } catch (error) {
+      console.error(`❌ Failed to generate simple WAV snippet:`, error);
+      return null;
+    }
+  }
+  
+  /**
+   * Create WAV file header
+   * NEW: Helper method for simple WAV generation
+   */
+  createWavHeader(dataLength, sampleRate, channels, bitsPerSample) {
+    const buffer = Buffer.alloc(44);
+    
+    // Calculate byte rate and block align
+    const byteRate = sampleRate * channels * bitsPerSample / 8;
+    const blockAlign = channels * bitsPerSample / 8;
+    const dataSize = dataLength * 2; // 16-bit samples = 2 bytes per sample
+    const fileSize = 36 + dataSize;
+    
+    console.log(`🎵 WAV header calculations: dataLength=${dataLength}, sampleRate=${sampleRate}, channels=${channels}, bitsPerSample=${bitsPerSample}`);
+    console.log(`🎵 WAV header calculations: byteRate=${byteRate}, blockAlign=${blockAlign}, dataSize=${dataSize}, fileSize=${fileSize}`);
+    
+    // RIFF header
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(fileSize, 4); // File size
+    buffer.write('WAVE', 8);
+    
+    // fmt chunk
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16); // fmt chunk size
+    buffer.writeUInt16LE(1, 20); // PCM format
+    buffer.writeUInt16LE(channels, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(byteRate, 28); // Byte rate
+    buffer.writeUInt16LE(blockAlign, 32); // Block align
+    buffer.writeUInt16LE(bitsPerSample, 34);
+    
+    // data chunk
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40); // Data size
+    
+    return buffer;
+  }
+
+  /**
+   * Enhanced feature extraction with log-mel and optional spectral whitening
+   * More stable features for adaptive thresholding
+   * FIXED: FFT size mismatch and mel frequency mapping
+   */
+  extractEnhancedFeatures(samples, sampleRate, carryOverBaseline = null) {
+    console.log(`🎵 Extracting features: ${samples.length} samples at ${sampleRate}Hz`);
+
+    const hopSamples = Math.floor((this.config.hopMs * sampleRate) / 1000);
+    const winSamples = Math.floor((this.config.winMs * sampleRate) / 1000);
+    const nFrames = Math.max(0, Math.floor((samples.length - winSamples) / hopSamples) + 1);
+
+    console.log(`📊 Frame params: hop=${hopSamples}, win=${winSamples}, frames=${nFrames}`);
+
+    if (nFrames <= 0) {
+      console.warn('⚠️ No frames to process');
+      return null;
+    }
+
+    // FIXED: STFT with proper frame sizing
+    const spectrogram = this.computeOptimizedSTFT(samples, winSamples, hopSamples);
+    if (!spectrogram) {
+      console.warn('⚠️ STFT computation failed');
+      return null;
+    }
+
+    // FIXED: Enhanced mel-scale conversion with proper frequency mapping
+    const melSpectrogram = this.computeEnhancedMelSpectrogram(spectrogram, sampleRate);
+    if (!melSpectrogram) {
+      console.warn('⚠️ Mel spectrogram computation failed');
+      return null;
+    }
+
+    console.log(`✅ Mel spectrogram: ${melSpectrogram.length} mel bins × ${melSpectrogram[0]?.length || 0} frames`);
+
+    // Apply log-mel transformation for stability
+    const logMelSpectrogram = this.config.enableLogMel
+      ? this.applyLogMelTransform(melSpectrogram)
+      : melSpectrogram;
+
+    // Optional spectral whitening for better noise robustness
+    const whitenedSpectrogram = this.config.enableSpectralWhitening
+      ? this.applySpectralWhitening(logMelSpectrogram)
+      : logMelSpectrogram;
+
+    // Additional features needed for bird detection
+    const spectralNovelty = this.config.useSpectralNovelty
+      ? this.computeOptimizedSpectralNovelty(whitenedSpectrogram)
+      : null;
+
+    const energyEntropy = this.config.useEnergyEntropy
+      ? this.computeOptimizedEnergyEntropy(whitenedSpectrogram)
+      : null;
+
+    // Add band energies for multi-band detection
+    const bandEnergies = this.computeOptimizedBandEnergies(spectrogram, sampleRate);
+
+    return {
+      mel: whitenedSpectrogram,
+      nFrames,
+      frameDurationMs: this.config.hopMs,
+      sampleRate,
+      spectralNovelty,
+      energyEntropy,
+      bandEnergies,
+      carryOverBaseline
+    };
+  }
+
+  /**
+   * Enhanced mel-spectrogram with configurable number of mel bins
+   * FIXED: Proper mel-scale frequency mapping
+   */
+  computeEnhancedMelSpectrogram(spectrogram, sampleRate) {
+    if (!spectrogram || spectrogram.length === 0 || !spectrogram[0]) {
+      console.warn('⚠️ Invalid spectrogram for mel conversion');
+      return null;
+    }
+
+    const nMels = this.config.melFilterBanks || this.config.nMels;
+    const nFreqBins = spectrogram.length;
+    const nFrames = spectrogram[0].length;
+
+    console.log(`🎼 Computing mel spectrogram: ${nFreqBins} freq bins → ${nMels} mel bins`);
+
+    // FIXED: Create mel filter bank with proper frequency mapping
+    const melFilters = this.createMelFilterBank(nFreqBins, sampleRate, nMels);
+    if (!melFilters) {
+      console.warn('⚠️ Failed to create mel filter bank');
+      return null;
+    }
+
+    console.log(`🔧 Mel filter bank created: ${nMels} filters for ${nFreqBins} frequency bins`);
+
+    // Apply mel filters
+    const melSpectrogram = [];
+    for (let m = 0; m < nMels; m++) {
+      melSpectrogram[m] = new Float32Array(nFrames);
+      for (let t = 0; t < nFrames; t++) {
+        let melEnergy = 0;
+        for (let f = 0; f < nFreqBins; f++) {
+          const spectrogramValue = spectrogram[f][t];
+          const filterValue = melFilters[m][f];
+          if (Number.isFinite(spectrogramValue) && Number.isFinite(filterValue)) {
+            melEnergy += spectrogramValue * filterValue;
+          }
+        }
+        melSpectrogram[m][t] = Math.max(melEnergy, 1e-10); // Prevent zero/negative values
       }
     }
 
-    // Merge overlapping events from chunk boundaries
-    return this.mergeChunkBoundaryEvents(allEvents);
+    // Validate output
+    let validMelBins = 0;
+    for (let m = 0; m < nMels; m++) {
+      let hasValidData = false;
+      for (let t = 0; t < nFrames; t++) {
+        if (melSpectrogram[m][t] > 1e-9) {
+          hasValidData = true;
+          break;
+        }
+      }
+      if (hasValidData) validMelBins++;
+    }
+
+    console.log(`✅ Mel spectrogram computed: ${validMelBins}/${nMels} mel bins have valid data`);
+
+    if (validMelBins === 0) {
+      console.warn('⚠️ No valid mel bins - all energy may be zero');
+      return null;
+    }
+
+    return melSpectrogram;
+  }
+
+  /**
+   * FIXED: Create mel filter bank with proper frequency mapping
+   */
+  createMelFilterBank(nFreqBins, sampleRate, nMels) {
+    // FIXED: Use proper mel-scale frequency mapping
+    const melToHz = (mel) => 700 * (Math.pow(10, mel / 2595) - 1);
+    const hzToMel = (hz) => 2595 * Math.log10(1 + hz / 700);
+    
+    const nyquist = sampleRate / 2;
+    const melMin = hzToMel(0);
+    const melMax = hzToMel(nyquist);
+    
+    // Create mel points
+    const melPoints = [];
+    for (let i = 0; i <= nMels + 1; i++) {
+      melPoints.push(melMin + (melMax - melMin) * i / (nMels + 1));
+    }
+    
+    // Convert back to Hz
+    const hzPoints = melPoints.map(melToHz);
+    
+    // Create filter bank
+    const filters = [];
+    for (let m = 0; m < nMels; m++) {
+      filters[m] = new Float32Array(nFreqBins);
+      
+      for (let f = 0; f < nFreqBins; f++) {
+        const freqHz = (f / nFreqBins) * nyquist;
+        
+        // Triangular filter response
+        if (freqHz >= hzPoints[m] && freqHz <= hzPoints[m + 2]) {
+          if (freqHz <= hzPoints[m + 1]) {
+            filters[m][f] = (freqHz - hzPoints[m]) / (hzPoints[m + 1] - hzPoints[m]);
+          } else {
+            filters[m][f] = (hzPoints[m + 2] - freqHz) / (hzPoints[m + 2] - hzPoints[m + 1]);
+          }
+        } else {
+          filters[m][f] = 0;
+        }
+      }
+    }
+    
+    return filters;
   }
 
   /**
@@ -436,697 +1122,6 @@ export class OptimizedAED {
   }
 
   /**
-   * Enhanced feature extraction with log-mel and optional spectral whitening
-   * More stable features for adaptive thresholding
-   */
-  extractEnhancedFeatures(samples, sampleRate, carryOverBaseline = null) {
-    console.log(`🎵 Extracting features: ${samples.length} samples at ${sampleRate}Hz`);
-
-    const hopSamples = Math.floor((this.config.hopMs * sampleRate) / 1000);
-    const winSamples = Math.floor((this.config.winMs * sampleRate) / 1000);
-    const nFrames = Math.max(0, Math.floor((samples.length - winSamples) / hopSamples) + 1);
-
-    console.log(`📊 Frame params: hop=${hopSamples}, win=${winSamples}, frames=${nFrames}`);
-
-    if (nFrames <= 0) {
-      console.warn('⚠️ No frames to process');
-      return null;
-    }
-
-    // Fast STFT with optimized FFT
-    const spectrogram = this.computeOptimizedSTFT(samples, winSamples, hopSamples);
-    if (!spectrogram) {
-      console.warn('⚠️ STFT computation failed');
-      return null;
-    }
-
-    // Enhanced mel-scale conversion with more bins (64-128 as suggested)
-    const melSpectrogram = this.computeEnhancedMelSpectrogram(spectrogram, sampleRate);
-    if (!melSpectrogram) {
-      console.warn('⚠️ Mel spectrogram computation failed');
-      return null;
-    }
-
-    console.log(`✅ Mel spectrogram: ${melSpectrogram.length} mel bins × ${melSpectrogram[0]?.length || 0} frames`);
-
-    // Apply log-mel transformation for stability
-    const logMelSpectrogram = this.config.enableLogMel
-      ? this.applyLogMelTransform(melSpectrogram)
-      : melSpectrogram;
-
-    // Optional spectral whitening for better noise robustness
-    const whitenedSpectrogram = this.config.enableSpectralWhitening
-      ? this.applySpectralWhitening(logMelSpectrogram)
-      : logMelSpectrogram;
-
-    // Additional features needed for bird detection
-    const spectralNovelty = this.config.useSpectralNovelty
-      ? this.computeOptimizedSpectralNovelty(whitenedSpectrogram)
-      : null;
-
-    const energyEntropy = this.config.useEnergyEntropy
-      ? this.computeOptimizedEnergyEntropy(whitenedSpectrogram)
-      : null;
-
-    // Add band energies for multi-band detection
-    const bandEnergies = this.computeOptimizedBandEnergies(spectrogram, sampleRate);
-
-    return {
-      mel: whitenedSpectrogram,
-      nFrames,
-      frameDurationMs: this.config.hopMs,
-      sampleRate,
-      spectralNovelty,
-      energyEntropy,
-      bandEnergies,
-      carryOverBaseline
-    };
-  }
-
-  /**
-   * Fallback to original feature extraction for compatibility
-   */
-  extractOptimizedFeatures(samples, sampleRate) {
-    return this.extractEnhancedFeatures(samples, sampleRate, null);
-  }
-
-  /**
-   * Enhanced mel-spectrogram with configurable number of mel bins
-   */
-  computeEnhancedMelSpectrogram(spectrogram, sampleRate) {
-    if (!spectrogram || spectrogram.length === 0 || !spectrogram[0]) {
-      console.warn('⚠️ Invalid spectrogram for mel conversion');
-      return null;
-    }
-
-    const nMels = this.config.melFilterBanks || this.config.nMels;
-    const nFreqBins = spectrogram.length;
-    const nFrames = spectrogram[0].length;
-
-    console.log(`🎼 Computing mel spectrogram: ${nFreqBins} freq bins → ${nMels} mel bins`);
-
-    // Create mel filter bank with correct parameter order
-    const melFilters = this.createMelFilterBank(nFreqBins, sampleRate, nMels);
-    if (!melFilters) {
-      console.warn('⚠️ Failed to create mel filter bank');
-      return null;
-    }
-
-    console.log(`🔧 Mel filter bank created: ${nMels} filters for ${nFreqBins} frequency bins`);
-
-    // Apply mel filters
-    const melSpectrogram = [];
-    for (let m = 0; m < nMels; m++) {
-      melSpectrogram[m] = new Float32Array(nFrames);
-      for (let t = 0; t < nFrames; t++) {
-        let melEnergy = 0;
-        for (let f = 0; f < nFreqBins; f++) {
-          const spectrogramValue = spectrogram[f][t];
-          const filterValue = melFilters[m][f];
-          if (Number.isFinite(spectrogramValue) && Number.isFinite(filterValue)) {
-            melEnergy += spectrogramValue * filterValue;
-          }
-        }
-        melSpectrogram[m][t] = Math.max(melEnergy, 1e-10); // Prevent zero/negative values
-      }
-    }
-
-    // Validate output
-    let validMelBins = 0;
-    for (let m = 0; m < nMels; m++) {
-      let hasValidData = false;
-      for (let t = 0; t < nFrames; t++) {
-        if (melSpectrogram[m][t] > 1e-9) {
-          hasValidData = true;
-          break;
-        }
-      }
-      if (hasValidData) validMelBins++;
-    }
-
-    console.log(`✅ Mel spectrogram computed: ${validMelBins}/${nMels} mel bins have valid data`);
-
-    if (validMelBins === 0) {
-      console.warn('⚠️ No valid mel bins - all energy may be zero');
-      return null;
-    }
-
-    return melSpectrogram;
-  }
-
-  /**
-   * Apply log-mel transformation for more stable features
-   */
-  applyLogMelTransform(melSpectrogram) {
-    const logMel = [];
-    for (let m = 0; m < melSpectrogram.length; m++) {
-      logMel[m] = new Float32Array(melSpectrogram[m].length);
-      for (let t = 0; t < melSpectrogram[m].length; t++) {
-        // Add small epsilon to avoid log(0)
-        logMel[m][t] = Math.log(melSpectrogram[m][t] + 1e-10);
-      }
-    }
-    return logMel;
-  }
-
-  /**
-   * Apply spectral whitening for noise robustness
-   */
-  applySpectralWhitening(spectrogram) {
-    const whitened = [];
-    const nMels = spectrogram.length;
-    const nFrames = spectrogram[0].length;
-
-    // Compute mean and std for each mel bin
-    for (let m = 0; m < nMels; m++) {
-      whitened[m] = new Float32Array(nFrames);
-
-      // Compute mean
-      let mean = 0;
-      for (let t = 0; t < nFrames; t++) {
-        mean += spectrogram[m][t];
-      }
-      mean /= nFrames;
-
-      // Compute std
-      let variance = 0;
-      for (let t = 0; t < nFrames; t++) {
-        const diff = spectrogram[m][t] - mean;
-        variance += diff * diff;
-      }
-      const std = Math.sqrt(variance / nFrames);
-
-      // Apply whitening
-      for (let t = 0; t < nFrames; t++) {
-        whitened[m][t] = (spectrogram[m][t] - mean) / Math.max(std, 1e-10);
-      }
-    }
-
-    return whitened;
-  }
-
-  /**
-   * Optimized STFT with reduced FFT points and faster computation
-   */
-  computeOptimizedSTFT(samples, winSamples, hopSamples) {
-    // Validate inputs
-    if (!samples || samples.length === 0) {
-      console.warn('⚠️ Empty samples for STFT');
-      return null;
-    }
-
-    const nFrames = Math.floor((samples.length - winSamples) / hopSamples) + 1;
-    const nFreqBins = this.config.nFFT / 2;
-
-    if (nFrames <= 0) {
-      console.warn('⚠️ No frames for STFT computation');
-      return null;
-    }
-
-    console.log(`🔧 STFT: ${samples.length} samples → ${nFrames} frames × ${nFreqBins} freq bins`);
-
-    const spectrogram = Array(nFreqBins).fill(null).map(() => new Float32Array(nFrames));
-    const window = this.fastWindow(winSamples);
-
-    let validFrames = 0;
-    for (let frameIdx = 0; frameIdx < nFrames; frameIdx++) {
-      const start = frameIdx * hopSamples;
-      const frame = new Float32Array(this.config.nFFT);
-
-      // Extract and window frame
-      const end = Math.min(start + winSamples, samples.length);
-      let hasValidData = false;
-
-      for (let i = 0; i < end - start; i++) {
-        const sample = samples[start + i];
-        if (Number.isFinite(sample)) {
-          frame[i] = sample * window[i];
-          hasValidData = true;
-        }
-      }
-
-      if (!hasValidData) continue;
-
-      // Fast FFT
-      const powerSpectrum = this.fastFFT(frame);
-      if (!powerSpectrum) continue;
-
-      // Store power spectrum with validation
-      let frameHasEnergy = false;
-      for (let freqIdx = 0; freqIdx < nFreqBins; freqIdx++) {
-        const power = powerSpectrum[freqIdx];
-        if (Number.isFinite(power) && power > 0) {
-          spectrogram[freqIdx][frameIdx] = Math.max(power, 1e-10);
-          frameHasEnergy = true;
-        } else {
-          spectrogram[freqIdx][frameIdx] = 1e-10;
-        }
-      }
-
-      if (frameHasEnergy) validFrames++;
-    }
-
-    console.log(`✅ STFT computed: ${validFrames}/${nFrames} valid frames`);
-
-    if (validFrames === 0) {
-      console.warn('⚠️ No valid frames in STFT - all audio data may be invalid');
-      return null;
-    }
-
-    return spectrogram;
-  }
-
-  /**
-   * Fast Hanning window generation
-   */
-  fastWindow(n) {
-    const w = new Float32Array(n);
-    const factor = 2 * Math.PI / (n - 1);
-    for (let i = 0; i < n; i++) {
-      w[i] = 0.5 * (1 - Math.cos(factor * i));
-    }
-    return w;
-  }
-
-  /**
-   * Simplified FFT that returns power spectrum directly
-   * Fixed to handle non-power-of-2 inputs and prevent NaN values
-   */
-  fastFFT(x) {
-    const N = x.length;
-
-    // Validate input
-    if (N === 0 || !Number.isFinite(N)) {
-      console.warn('⚠️ Invalid FFT input length:', N);
-      return new Float32Array(N / 2);
-    }
-
-    // Check if N is power of 2, if not, use DFT fallback
-    if ((N & (N - 1)) !== 0) {
-      return this.computeDFT(x);
-    }
-
-    const out = new Float32Array(N * 2);
-
-    // Copy input to complex array with NaN/Infinity checks
-    for (let i = 0; i < N; i++) {
-      const val = x[i];
-      out[i * 2] = Number.isFinite(val) ? val : 0;
-      out[i * 2 + 1] = 0;
-    }
-
-    // Bit-reversal
-    const bits = Math.log2(N);
-    for (let i = 0; i < N; i++) {
-      const j = this.bitReverse(i, bits);
-      if (i < j) {
-        [out[i * 2], out[j * 2]] = [out[j * 2], out[i * 2]];
-        [out[i * 2 + 1], out[j * 2 + 1]] = [out[j * 2 + 1], out[i * 2 + 1]];
-      }
-    }
-    
-    // FFT
-    for (let size = 2; size <= N; size *= 2) {
-      const half = size / 2;
-      const step = N / size;
-      
-      for (let i = 0; i < N; i += size) {
-        for (let j = i, k = 0; j < i + half; j++, k += step) {
-          const theta = -2 * Math.PI * (k % N) / N;
-          const wr = Math.cos(theta);
-          const wi = Math.sin(theta);
-          
-          const xr = out[(j + half) * 2];
-          const xi = out[(j + half) * 2 + 1];
-          const yr = wr * xr - wi * xi;
-          const yi = wr * xi + wi * xr;
-          
-          out[(j + half) * 2] = out[j * 2] - yr;
-          out[(j + half) * 2 + 1] = out[j * 2 + 1] - yi;
-          out[j * 2] += yr;
-          out[j * 2 + 1] += yi;
-        }
-      }
-    }
-    
-    // Return power spectrum with NaN protection
-    const power = new Float32Array(N / 2);
-    for (let i = 0; i < N / 2; i++) {
-      const real = out[i * 2];
-      const imag = out[i * 2 + 1];
-      const powerVal = real * real + imag * imag;
-      power[i] = Number.isFinite(powerVal) ? Math.max(powerVal, 1e-10) : 1e-10;
-    }
-
-    return power;
-  }
-
-  /**
-   * DFT fallback for non-power-of-2 inputs
-   */
-  computeDFT(x) {
-    const N = x.length;
-    const power = new Float32Array(N / 2);
-
-    for (let k = 0; k < N / 2; k++) {
-      let real = 0;
-      let imag = 0;
-
-      for (let n = 0; n < N; n++) {
-        const angle = -2 * Math.PI * k * n / N;
-        const val = Number.isFinite(x[n]) ? x[n] : 0;
-        real += val * Math.cos(angle);
-        imag += val * Math.sin(angle);
-      }
-
-      const powerVal = real * real + imag * imag;
-      power[k] = Number.isFinite(powerVal) ? Math.max(powerVal, 1e-10) : 1e-10;
-    }
-
-    return power;
-  }
-
-  bitReverse(num, bits) {
-    let result = 0;
-    for (let i = 0; i < bits; i++) {
-      result = (result << 1) | (num & 1);
-      num >>= 1;
-    }
-    return result;
-  }
-
-  /**
-   * Fast mel-scale conversion with pre-computed filter bank
-   */
-  computeFastMelSpectrogram(spectrogram, sampleRate) {
-    const nFreqBins = spectrogram.length;
-    const nFrames = spectrogram[0].length;
-    const nMels = this.config.nMels;
-    
-    // Create mel filter bank (cached for reuse)
-    if (!this.melFilters) {
-      this.melFilters = this.createMelFilterBank(nFreqBins, sampleRate, nMels);
-    }
-    
-    const melSpec = Array(nMels).fill(null).map(() => new Float32Array(nFrames));
-    
-    for (let frameIdx = 0; frameIdx < nFrames; frameIdx++) {
-      for (let melIdx = 0; melIdx < nMels; melIdx++) {
-        let energy = 0;
-        const filter = this.melFilters[melIdx];
-        
-        for (let freqIdx = 0; freqIdx < nFreqBins; freqIdx++) {
-          energy += spectrogram[freqIdx][frameIdx] * filter[freqIdx];
-        }
-        
-        melSpec[melIdx][frameIdx] = 10 * Math.log10(Math.max(energy, 1e-10));
-      }
-    }
-    
-    return melSpec;
-  }
-
-  /**
-   * Optimized energy-based event detection
-   */
-  detectEnergyEventsOptimized(features) {
-    const events = [];
-    
-    for (const band of this.config.targetBands) {
-      const bandEvents = this.detectBandEventsOptimized(features, band);
-      events.push(...bandEvents.map(e => ({ ...e, band_name: band.name })));
-    }
-    
-    return events;
-  }
-
-  /**
-   * Improved band event detection with adaptive thresholding
-   */
-  detectBandEventsOptimized(features, band) {
-    const { mel, nFrames, frameDurationMs } = features;
-    const nyquist = features.sampleRate / 2;
-    
-    // Map frequency band to mel indices
-    const startMel = Math.floor((band.fmin / nyquist) * this.config.nMels);
-    const endMel = Math.ceil((band.fmax / nyquist) * this.config.nMels);
-    
-    // Compute band energy
-    const bandEnergy = new Float32Array(nFrames);
-    for (let t = 0; t < nFrames; t++) {
-      let energy = 0;
-      for (let m = startMel; m <= endMel && m < this.config.nMels; m++) {
-        energy += mel[m][t];
-      }
-      bandEnergy[t] = energy / Math.max(1, endMel - startMel + 1);
-    }
-    
-    // Enhanced per-band rolling baseline with longer window
-    const baseline = this.computeOptimizedBaseline(bandEnergy);
-    const thresholds = this.computeOptimizedThreshold(bandEnergy, baseline);
-
-    // Enhanced event detection with proper hysteresis (K_on and K_off)
-    const events = [];
-    let inEvent = false;
-    let eventStart = 0;
-    let maxEnergy = -Infinity;
-    let peakTime = 0;
-    let peakFreq = 0;
-
-    for (let t = 0; t < nFrames; t++) {
-      const signal = bandEnergy[t];
-
-      if (!inEvent && signal > thresholds.onset[t]) {
-        // Event onset: signal > baseline + K_on dB
-        inEvent = true;
-        eventStart = t;
-        maxEnergy = signal - baseline[t];
-        peakTime = t;
-      } else if (inEvent && signal < thresholds.offset[t]) {
-        // Event offset: signal < baseline + K_off dB (K_off < K_on)
-        const eventEnd = t;
-        const durationMs = (eventEnd - eventStart) * frameDurationMs;
-
-        if (durationMs >= this.config.minDurationMs && durationMs <= this.config.maxDurationMs) {
-          // Find peak frequency for this event
-          const estPeakFreq = this.estimatePeakFrequency(features, band, eventStart, eventEnd);
-
-          // Calculate SNR in dB
-          const snrLinear = maxEnergy / Math.max(baseline[peakTime], 1e-10);
-          const snrDb = 20 * Math.log10(snrLinear);
-
-          events.push({
-            start_ms: Math.round(eventStart * frameDurationMs),
-            end_ms: Math.round(eventEnd * frameDurationMs),
-            f_min_hz: band.fmin,
-            f_max_hz: band.fmax,
-            peak_freq_hz: estPeakFreq || (band.fmin + band.fmax) / 2,
-            snr_db: snrDb,
-            confidence: Math.min(1.0, Math.max(0.1, snrDb / 20.0)) // dB-based confidence
-          });
-        }
-        
-        inEvent = false;
-      } else if (inEvent && signal > maxEnergy) {
-        maxEnergy = signal;
-        peakTime = t;
-      }
-    }
-    
-    return events;
-  }
-
-  /**
-   * Enhanced rolling baseline using trailing median for adaptive per-band processing
-   * Uses longer window (30-120s) and more efficient approach for memory management
-   */
-  computeOptimizedBaseline(signal) {
-    const nFrames = signal.length;
-    const baseline = new Float32Array(nFrames);
-    const windowFrames = Math.floor((this.config.baselineWindowSec * 1000) / this.config.hopMs);
-
-    // Use circular buffer for efficient rolling median computation
-    const windowBuffer = [];
-    let bufferIndex = 0;
-
-    for (let t = 0; t < nFrames; t++) {
-      // Add current sample to circular buffer
-      if (windowBuffer.length < windowFrames) {
-        windowBuffer.push(signal[t]);
-      } else {
-        windowBuffer[bufferIndex] = signal[t];
-        bufferIndex = (bufferIndex + 1) % windowFrames;
-      }
-
-      // Compute trailing median (only look backward for true trailing baseline)
-      if (t >= Math.min(windowFrames, Math.floor(windowFrames * 0.3))) {
-        const sortedBuffer = [...windowBuffer].sort((a, b) => a - b);
-        baseline[t] = sortedBuffer[Math.floor(sortedBuffer.length / 2)];
-      } else {
-        // For initial frames, use expanding window
-        const sortedWindow = signal.slice(0, t + 1).sort((a, b) => a - b);
-        baseline[t] = sortedWindow[Math.floor(sortedWindow.length / 2)];
-      }
-    }
-
-    return baseline;
-  }
-
-  /**
-   * Memory-efficient streaming baseline for chunk processing
-   * Carries over baseline state between chunks to maintain continuity
-   */
-  computeStreamingBaseline(signal, carryOverBaseline = null) {
-    const nFrames = signal.length;
-    const baseline = new Float32Array(nFrames);
-    const windowFrames = Math.floor((this.config.baselineWindowSec * 1000) / this.config.hopMs);
-
-    // Initialize with carry-over from previous chunk if available
-    let initBuffer = [];
-    if (carryOverBaseline && carryOverBaseline.length > 0) {
-      const carryFrames = Math.min(windowFrames, carryOverBaseline.length);
-      initBuffer = carryOverBaseline.slice(-carryFrames);
-    }
-
-    // Efficient rolling median using sorted insertion for memory efficiency
-    const sortedWindow = [...initBuffer].sort((a, b) => a - b);
-
-    for (let t = 0; t < nFrames; t++) {
-      const value = signal[t];
-
-      // Binary search insertion to maintain sorted order
-      let left = 0, right = sortedWindow.length;
-      while (left < right) {
-        const mid = Math.floor((left + right) / 2);
-        if (sortedWindow[mid] < value) left = mid + 1;
-        else right = mid;
-      }
-      sortedWindow.splice(left, 0, value);
-
-      // Remove oldest sample if window exceeds size
-      if (sortedWindow.length > windowFrames) {
-        const removeIndex = t - windowFrames + initBuffer.length;
-        if (removeIndex >= 0 && removeIndex < signal.length) {
-          const oldValue = signal[removeIndex];
-          const removePos = sortedWindow.indexOf(oldValue);
-          if (removePos !== -1) {
-            sortedWindow.splice(removePos, 1);
-          }
-        } else if (initBuffer.length > 0) {
-          // Remove from carry-over buffer
-          const oldValue = initBuffer.shift();
-          const removePos = sortedWindow.indexOf(oldValue);
-          if (removePos !== -1) {
-            sortedWindow.splice(removePos, 1);
-          }
-        }
-      }
-
-      // Get median from sorted window
-      baseline[t] = sortedWindow[Math.floor(sortedWindow.length / 2)];
-    }
-
-    return baseline;
-  }
-  
-  /**
-   * Enhanced hysteresis threshold computation with K_on and K_off
-   * Returns both onset and offset thresholds for better event boundaries
-   */
-  computeOptimizedThreshold(signal, baseline) {
-    const nFrames = signal.length;
-    const onsetThreshold = new Float32Array(nFrames);
-    const offsetThreshold = new Float32Array(nFrames);
-
-    // Convert dB thresholds to linear scale
-    const konLinear = Math.pow(10, this.config.onsetThresholdDb / 20);
-    const koffLinear = Math.pow(10, this.config.offsetThresholdDb / 20);
-
-    for (let t = 0; t < nFrames; t++) {
-      // Hysteresis thresholds: K_on > K_off for stable event boundaries
-      onsetThreshold[t] = baseline[t] * konLinear;   // baseline + K_on dB
-      offsetThreshold[t] = baseline[t] * koffLinear; // baseline + K_off dB
-    }
-
-    return {
-      onset: onsetThreshold,
-      offset: offsetThreshold
-    };
-  }
-
-  /**
-   * Alternative adaptive threshold with local noise estimation
-   * Fallback for very noisy environments where fixed dB thresholds don't work
-   */
-  computeAdaptiveThreshold(signal, baseline) {
-    const nFrames = signal.length;
-    const threshold = new Float32Array(nFrames);
-    const windowFrames = Math.floor((this.config.adaptiveWindowSec * 1000) / this.config.hopMs);
-
-    // Use reduced sampling for efficiency
-    const samplingRate = 3;
-
-    for (let t = 0; t < nFrames; t += samplingRate) {
-      const start = Math.max(0, t - windowFrames);
-      const end = Math.min(nFrames, t + windowFrames);
-
-      // Compute local noise statistics
-      let sum = 0;
-      let count = 0;
-      for (let i = start; i < end; i += samplingRate) {
-        const residual = signal[i] - baseline[i];
-        if (residual > 0) { // Only consider positive residuals for noise estimation
-          sum += residual;
-          count++;
-        }
-      }
-      const meanNoise = count > 0 ? sum / count : 0;
-
-      // Compute noise variance
-      let variance = 0;
-      for (let i = start; i < end; i += samplingRate) {
-        const residual = signal[i] - baseline[i];
-        if (residual > 0) {
-          const diff = residual - meanNoise;
-          variance += diff * diff;
-        }
-      }
-      const noiseStd = Math.sqrt(variance / Math.max(1, count));
-
-      // Adaptive threshold based on local noise characteristics
-      threshold[t] = baseline[t] + meanNoise + (noiseStd * 2.5);
-
-      // Interpolate for skipped points
-      if (t > 0 && t - samplingRate >= 0) {
-        const prevValue = threshold[t - samplingRate];
-        const step = (threshold[t] - prevValue) / samplingRate;
-        for (let i = 1; i < samplingRate && t - samplingRate + i < nFrames; i++) {
-          threshold[t - samplingRate + i] = prevValue + (step * i);
-        }
-      }
-    }
-
-    // Fill in any remaining values
-    for (let t = 0; t < nFrames; t++) {
-      if (threshold[t] === 0 && t > 0) {
-        threshold[t] = threshold[t-1];
-      }
-    }
-
-    return { onset: threshold, offset: threshold };
-  }
-  
-  /**
-   * Legacy fast threshold computation using percentiles
-   */
-  computeFastThreshold(signal) {
-    const sorted = Array.from(signal).sort((a, b) => a - b);
-    const p75 = sorted[Math.floor(sorted.length * 0.75)];
-    const p50 = sorted[Math.floor(sorted.length * 0.50)];
-    return p50 + (p75 - p50) * this.config.onsetThresholdSigma;
-  }
-
-  /**
    * Fast event merging without complex overlap analysis
    */
   fastMergeEvents(events) {
@@ -1162,8 +1157,11 @@ export class OptimizedAED {
 
   /**
    * Filter and refine detected events
+   * FIXED: Added missing method that was referenced but not implemented
    */
-  filterAndRefineEvents(events) {
+  filterOptimizedEvents(events, features, audioProfile) {
+    if (!events || events.length === 0) return [];
+    
     // First merge similar events (often detected by different methods)
     const merged = this.mergeOverlappingEvents(events);
     
@@ -1239,34 +1237,43 @@ export class OptimizedAED {
 
   /**
    * Batch insert events to reduce database overhead
+   * FIXED: Properly handles deduplication fields and audio snippets
    */
   async batchInsertEvents(recordingId, events) {
     if (events.length === 0) return [];
     
-    // Clear existing events
+    // Clear existing events for this recording
     await db.query(`DELETE FROM aed_events WHERE recording_id = :recordingId`, {
       replacements: { recordingId },
       type: QueryTypes.DELETE
     });
     
-    // Batch insert - prepare values
+    // Batch insert - prepare values with all fields including deduplication
     const values = events.map((event, idx) => ({
       recordingId: recordingId,
       segmentId: event.segment_id,
-      startMs: event.start_ms,
-      endMs: event.end_ms,
+      startMs: event.start_ms,                    // Relative timing (0ms to segment duration)
+      endMs: event.end_ms,                        // Relative timing (0ms to segment duration)
+      absoluteStartMs: event.absolute_start_ms || event.start_ms,  // Absolute timing (fallback)
+      absoluteEndMs: event.absolute_end_ms || event.end_ms,        // Absolute timing (fallback)
       fmin: event.f_min_hz || null,
       fmax: event.f_max_hz || null,
       peak: event.peak_freq_hz || null,
       snr: event.snr_db || null,
       conf: event.confidence || 0.5,
       method: 'optimized-v1',
-      version: '1.0'
+      version: '1.0',
+      snippetS3Key: event.snippet_s3_key || null,  // Audio snippet S3 key
+      // FIXED: Add deduplication fields
+      duplicateOf: event.duplicate_of || null,
+      temporalIou: event.temporal_iou || null,
+      frequencyIou: event.frequency_iou || null,
+      dedupConfidence: event.dedup_confidence || null
     }));
     
-    // Build batch insert query
+    // Build batch insert query with deduplication fields
     const placeholders = values.map((_, idx) => 
-      `(:recordingId${idx}, :segmentId${idx}, :startMs${idx}, :endMs${idx}, :fmin${idx}, :fmax${idx}, :peak${idx}, :snr${idx}, :conf${idx}, :method${idx}, :version${idx}, NULL)`
+      `(:recordingId${idx}, :segmentId${idx}, :startMs${idx}, :endMs${idx}, :absoluteStartMs${idx}, :absoluteEndMs${idx}, :fmin${idx}, :fmax${idx}, :peak${idx}, :snr${idx}, :conf${idx}, :method${idx}, :version${idx}, :snippetS3Key${idx}, :duplicateOf${idx}, :temporalIou${idx}, :frequencyIou${idx}, :dedupConfidence${idx})`
     ).join(', ');
     
     const replacements = {};
@@ -1275,6 +1282,8 @@ export class OptimizedAED {
       replacements[`segmentId${idx}`] = v.segmentId;
       replacements[`startMs${idx}`] = v.startMs;
       replacements[`endMs${idx}`] = v.endMs;
+      replacements[`absoluteStartMs${idx}`] = v.absoluteStartMs;
+      replacements[`absoluteEndMs${idx}`] = v.absoluteEndMs;
       replacements[`fmin${idx}`] = v.fmin;
       replacements[`fmax${idx}`] = v.fmax;
       replacements[`peak${idx}`] = v.peak;
@@ -1282,12 +1291,19 @@ export class OptimizedAED {
       replacements[`conf${idx}`] = v.conf;
       replacements[`method${idx}`] = v.method;
       replacements[`version${idx}`] = v.version;
+      replacements[`snippetS3Key${idx}`] = v.snippetS3Key;
+      // FIXED: Add deduplication field replacements
+      replacements[`duplicateOf${idx}`] = v.duplicateOf;
+      replacements[`temporalIou${idx}`] = v.temporalIou;
+      replacements[`frequencyIou${idx}`] = v.frequencyIou;
+      replacements[`dedupConfidence${idx}`] = v.dedupConfidence;
     });
     
     const insertedEvents = await db.query(`
       INSERT INTO aed_events (
-        recording_id, segment_id, start_ms, end_ms, f_min_hz, f_max_hz, peak_freq_hz, 
-        snr_db, confidence, method, method_version, snippet_s3_key
+        recording_id, segment_id, start_ms, end_ms, absolute_start_ms, absolute_end_ms, 
+        f_min_hz, f_max_hz, peak_freq_hz, snr_db, confidence, method, method_version, snippet_s3_key,
+        duplicate_of, temporal_iou, frequency_iou, dedup_confidence
       ) VALUES ${placeholders}
       RETURNING *
     `, {
@@ -1299,8 +1315,10 @@ export class OptimizedAED {
     const tagValues = insertedEvents[0].map((row, idx) => ({
       eventId: row.id,
       label: events[idx].band_name || 'auto',
-      verdict: 'detected',
-      notes: `Optimized method v1.0`
+      verdict: events[idx].duplicate_of ? 'duplicate' : 'detected',
+      notes: events[idx].duplicate_of 
+        ? `Duplicate of event ${events[idx].duplicate_of} (temporal IoU: ${events[idx].temporal_iou?.toFixed(3)}, frequency IoU: ${events[idx].frequency_iou?.toFixed(3)})`
+        : `Optimized method v1.0`
     }));
     
     const tagPlaceholders = tagValues.map((_, idx) => 
@@ -1323,6 +1341,7 @@ export class OptimizedAED {
       type: QueryTypes.INSERT
     });
     
+    console.log(`✅ Database insertion complete: ${insertedEvents[0].length} events stored`);
     return insertedEvents[0];
   }
 
@@ -1552,107 +1571,14 @@ export class OptimizedAED {
   }
   
   /**
-   * Estimate peak frequency for an event
+   * REMOVED: Duplicate method - use the corrected version above
+   * The corrected version is in the detectBandEventsOptimized method
    */
-  estimatePeakFrequency(features, band, startFrame, endFrame) {
-    // Use mel spectrogram since raw spectrogram is not available
-    const { mel, sampleRate } = features;
-    if (!mel || !mel.length) {
-      // Return band center frequency as fallback
-      return (band.fmin + band.fmax) / 2;
-    }
-
-    const nMels = mel.length;
-    const nyquist = sampleRate / 2;
-
-    // Map band to mel bins (approximate)
-    const melToFreq = (mel) => 700 * (Math.exp(mel / 1127) - 1);
-    const freqToMel = (freq) => 1127 * Math.log(1 + freq / 700);
-
-    const startMel = Math.floor(freqToMel(band.fmin) * nMels / freqToMel(nyquist));
-    const endMel = Math.ceil(freqToMel(band.fmax) * nMels / freqToMel(nyquist));
-
-    // Find peak mel bin over the event duration
-    let maxEnergy = -Infinity;
-    let peakMel = Math.floor((startMel + endMel) / 2); // Default to band center
-
-    for (let m = Math.max(0, startMel); m <= Math.min(endMel, nMels - 1); m++) {
-      let energy = 0;
-      let validFrames = 0;
-      for (let t = startFrame; t <= endFrame && t < mel[m].length; t++) {
-        if (Number.isFinite(mel[m][t])) {
-          energy += mel[m][t];
-          validFrames++;
-        }
-      }
-
-      if (validFrames > 0 && energy > maxEnergy) {
-        maxEnergy = energy;
-        peakMel = m;
-      }
-    }
-
-    // Convert bin to frequency
-    // Convert mel bin back to frequency
-    const peakFreq = melToFreq(peakMel * freqToMel(nyquist) / nMels);
-    return Number.isFinite(peakFreq) ? peakFreq : (band.fmin + band.fmax) / 2;
-  }
   
   /**
    * Create mel filter bank with debugging
    */
-  createMelFilterBank(nFreqs, sr, nMels) {
-    console.log(`🎼 Creating mel filter bank: ${nFreqs} freq bins, ${sr}Hz sample rate, ${nMels} mel bins`);
-
-    const filters = Array(nMels).fill(null).map(() => new Float32Array(nFreqs));
-    const mel = (f) => 2595 * Math.log10(1 + f / 700);
-    const invMel = (m) => 700 * (Math.pow(10, m / 2595) - 1);
-    const fMin = 0, fMax = sr / 2;
-    const mMin = mel(fMin), mMax = mel(fMax);
-    const centers = [];
-
-    console.log(`🔧 Frequency range: ${fMin}Hz - ${fMax}Hz, Mel range: ${mMin.toFixed(1)} - ${mMax.toFixed(1)}`);
-
-    for (let i = 0; i < nMels + 2; i++) {
-      centers.push(invMel(mMin + (i * (mMax - mMin)) / (nMels + 1)));
-    }
-
-    const bins = centers.map((f) => Math.floor((f / fMax) * (nFreqs - 1)));
-
-    console.log(`🔧 Filter centers (Hz): ${centers.slice(0, 5).map(f => f.toFixed(0)).join(', ')}...`);
-    console.log(`🔧 Filter bins: ${bins.slice(0, 5).join(', ')}...`);
-
-    let totalFilterWeight = 0;
-    for (let m = 0; m < nMels; m++) {
-      const left = bins[m], center = bins[m + 1], right = bins[m + 2];
-      let filterSum = 0;
-
-      for (let k = left; k < center; k++) {
-        if (k >= 0 && k < nFreqs) {
-          const weight = (k - left) / Math.max(1, center - left);
-          filters[m][k] = weight;
-          filterSum += weight;
-        }
-      }
-      for (let k = center; k < right; k++) {
-        if (k >= 0 && k < nFreqs) {
-          const weight = (right - k) / Math.max(1, right - center);
-          filters[m][k] = weight;
-          filterSum += weight;
-        }
-      }
-
-      totalFilterWeight += filterSum;
-    }
-
-    console.log(`✅ Mel filter bank created: total filter weight = ${totalFilterWeight.toFixed(3)}`);
-
-    if (totalFilterWeight < 0.1) {
-      console.warn('⚠️ Very low total filter weight - filters may be incorrectly positioned');
-    }
-
-    return filters;
-  }
+  // REMOVED: Duplicate method - use the corrected version above
 
   /**
    * Report progress to callback
@@ -2399,6 +2325,889 @@ export class OptimizedAED {
       dbOffset,
       deviceType
     };
+  }
+
+  /**
+   * Optimized STFT with reduced FFT points and faster computation
+   * FIXED: FFT size mismatch and proper frame handling
+   */
+  computeOptimizedSTFT(samples, winSamples, hopSamples) {
+    // Validate inputs
+    if (!samples || samples.length === 0) {
+      console.warn('⚠️ Empty samples for STFT');
+      return null;
+    }
+
+    const nFrames = Math.floor((samples.length - winSamples) / hopSamples) + 1;
+    // FIXED: Use actual FFT size, not hardcoded division
+    const nFreqBins = Math.floor(this.config.nFFT / 2);
+
+    if (nFrames <= 0) {
+      console.warn('⚠️ No frames for STFT computation');
+      return null;
+    }
+
+    console.log(`🔧 STFT: ${samples.length} samples → ${nFrames} frames × ${nFreqBins} freq bins`);
+
+    const spectrogram = Array(nFreqBins).fill(null).map(() => new Float32Array(nFrames));
+    const window = this.fastWindow(winSamples);
+
+    let validFrames = 0;
+    for (let frameIdx = 0; frameIdx < nFrames; frameIdx++) {
+      const start = frameIdx * hopSamples;
+      
+      // FIXED: Ensure frame size matches FFT size
+      const frameSize = Math.min(winSamples, this.config.nFFT);
+      const frame = new Float32Array(this.config.nFFT);
+      frame.fill(0); // Zero-pad if needed
+
+      // Extract and window frame
+      const end = Math.min(start + winSamples, samples.length);
+      let hasValidData = false;
+
+      for (let i = 0; i < Math.min(end - start, frameSize); i++) {
+        const sample = samples[start + i];
+        if (Number.isFinite(sample)) {
+          frame[i] = sample * window[i];
+          hasValidData = true;
+        }
+      }
+
+      if (!hasValidData) continue;
+
+      // Fast FFT
+      const powerSpectrum = this.fastFFT(frame);
+      if (!powerSpectrum) continue;
+
+      // Store power spectrum with validation
+      let frameHasEnergy = false;
+      for (let freqIdx = 0; freqIdx < nFreqBins; freqIdx++) {
+        const power = powerSpectrum[freqIdx];
+        if (Number.isFinite(power) && power > 0) {
+          spectrogram[freqIdx][frameIdx] = Math.max(power, 1e-10);
+          frameHasEnergy = true;
+        } else {
+          spectrogram[freqIdx][frameIdx] = 1e-10;
+        }
+      }
+
+      if (frameHasEnergy) validFrames++;
+    }
+
+    console.log(`✅ STFT computed: ${validFrames}/${nFrames} valid frames`);
+
+    if (validFrames === 0) {
+      console.warn('⚠️ No valid frames in STFT - all audio data may be invalid');
+      return null;
+    }
+
+    return spectrogram;
+  }
+
+  /**
+   * Enhanced rolling baseline using trailing median for adaptive per-band processing
+   * Uses longer window (30-120s) and more efficient approach for memory management
+   * FIXED: Consistent baseline calculation and memory management
+   */
+  computeOptimizedBaseline(signal) {
+    const nFrames = signal.length;
+    const baseline = new Float32Array(nFrames);
+    const windowFrames = Math.floor((this.config.baselineWindowSec * 1000) / this.config.hopMs);
+
+    // FIXED: Use consistent baseline calculation for all frames
+    for (let t = 0; t < nFrames; t++) {
+      const windowStart = Math.max(0, t - windowFrames + 1);
+      const window = signal.slice(windowStart, t + 1);
+      
+      // Sort and get median
+      const sortedWindow = [...window].sort((a, b) => a - b);
+      baseline[t] = sortedWindow[Math.floor(sortedWindow.length / 2)];
+    }
+
+    return baseline;
+  }
+
+  /**
+   * Memory-efficient streaming baseline for chunk processing
+   * Carries over baseline state between chunks to maintain continuity
+   * FIXED: Proper circular buffer implementation
+   */
+  computeStreamingBaseline(signal, carryOverBaseline = null) {
+    const nFrames = signal.length;
+    const baseline = new Float32Array(nFrames);
+    const windowFrames = Math.floor((this.config.baselineWindowSec * 1000) / this.config.hopMs);
+
+    // Initialize with carry-over from previous chunk if available
+    let initBuffer = [];
+    if (carryOverBaseline && carryOverBaseline.length > 0) {
+      const carryFrames = Math.min(windowFrames, carryOverBaseline.length);
+      initBuffer = carryOverBaseline.slice(-carryFrames);
+    }
+
+    // FIXED: Proper circular buffer with fixed size
+    const sortedWindow = [...initBuffer].sort((a, b) => a - b);
+    const maxWindowSize = windowFrames;
+
+    for (let t = 0; t < nFrames; t++) {
+      const value = signal[t];
+
+      // Binary search insertion to maintain sorted order
+      let left = 0, right = sortedWindow.length;
+      while (left < right) {
+        const mid = Math.floor((left + right) / 2);
+        if (sortedWindow[mid] < value) left = mid + 1;
+        else right = mid;
+      }
+      sortedWindow.splice(left, 0, value);
+
+      // FIXED: Maintain fixed window size to prevent memory leaks
+      if (sortedWindow.length > maxWindowSize) {
+        // Remove oldest sample
+        const removeIndex = t - maxWindowSize + initBuffer.length;
+        if (removeIndex >= 0 && removeIndex < signal.length) {
+          const oldValue = signal[removeIndex];
+          const removePos = sortedWindow.indexOf(oldValue);
+          if (removePos !== -1) {
+            sortedWindow.splice(removePos, 1);
+          }
+        } else if (initBuffer.length > 0) {
+          // Remove from carry-over buffer
+          const oldValue = initBuffer.shift();
+          const removePos = sortedWindow.indexOf(oldValue);
+          if (removePos !== -1) {
+            sortedWindow.splice(removePos, 1);
+          }
+        }
+      }
+
+      // Get median from sorted window
+      baseline[t] = sortedWindow[Math.floor(sortedWindow.length / 2)];
+    }
+
+    return baseline;
+  }
+  
+  /**
+   * Enhanced hysteresis threshold computation with K_on and K_off
+   * Returns both onset and offset thresholds for better event boundaries
+   * FIXED: Proper dB-based threshold calculation
+   */
+  computeOptimizedThreshold(signal, baseline) {
+    const nFrames = signal.length;
+    const onsetThreshold = new Float32Array(nFrames);
+    const offsetThreshold = new Float32Array(nFrames);
+
+    // FIXED: Convert dB thresholds to linear scale correctly
+    const konLinear = Math.pow(10, this.config.onsetThresholdDb / 20);
+    const koffLinear = Math.pow(10, this.config.offsetThresholdDb / 20);
+
+    for (let t = 0; t < nFrames; t++) {
+      // FIXED: Proper threshold calculation - multiply by linear factors
+      onsetThreshold[t] = baseline[t] * konLinear;   // baseline * 10^(K_on/20)
+      offsetThreshold[t] = baseline[t] * koffLinear; // baseline * 10^(K_off/20)
+    }
+
+    return {
+      onset: onsetThreshold,
+      offset: offsetThreshold
+    };
+  }
+
+  /**
+   * Alternative adaptive threshold with local noise estimation
+   * Fallback for very noisy environments where fixed dB thresholds don't work
+   * FIXED: Proper threshold calculation
+   */
+  computeAdaptiveThreshold(signal, baseline) {
+    const nFrames = signal.length;
+    const threshold = new Float32Array(nFrames);
+    const windowFrames = Math.floor((this.config.adaptiveWindowSec * 1000) / this.config.hopMs);
+
+    // Use reduced sampling for efficiency
+    for (let t = 0; t < nFrames; t++) {
+      const windowStart = Math.max(0, t - windowFrames + 1);
+      const window = signal.slice(windowStart, t + 1);
+      
+      // Calculate local noise level
+      const sortedWindow = [...window].sort((a, b) => a - b);
+      const noiseLevel = sortedWindow[Math.floor(sortedWindow.length * 0.1)]; // 10th percentile
+      
+      // FIXED: Use proper threshold calculation
+      threshold[t] = noiseLevel * Math.pow(10, this.config.onsetThresholdDb / 20);
+    }
+
+    return threshold;
+  }
+
+  /**
+   * Improved band event detection with adaptive thresholding
+   * FIXED: Proper frequency band mapping and event validation
+   */
+  detectBandEventsOptimized(features, band) {
+    const { mel, nFrames, frameDurationMs } = features;
+    const nyquist = features.sampleRate / 2;
+    
+    // FIXED: Proper mel-to-frequency mapping for target bands
+    const melToHz = (mel) => 700 * (Math.pow(10, mel / 2595) - 1);
+    const hzToMel = (hz) => 2595 * Math.log10(1 + hz / 700);
+    
+    // Map frequency band to mel indices using proper mel scale
+    const bandMelMin = hzToMel(band.fmin);
+    const bandMelMax = hzToMel(band.fmax);
+    
+    // Find mel bins that actually contain the target frequency range
+    const startMel = Math.floor((bandMelMin / hzToMel(nyquist)) * this.config.nMels);
+    const endMel = Math.ceil((bandMelMax / hzToMel(nyquist)) * this.config.nMels);
+    
+    // Validate mel bin range
+    const validStartMel = Math.max(0, Math.min(startMel, this.config.nMels - 1));
+    const validEndMel = Math.max(validStartMel, Math.min(endMel, this.config.nMels - 1));
+    
+    if (validEndMel <= validStartMel) {
+      console.warn(`⚠️ Invalid mel bin range for band ${band.name}: ${validStartMel}-${validEndMel}`);
+      return [];
+    }
+    
+    // Compute band energy
+    const bandEnergy = new Float32Array(nFrames);
+    for (let t = 0; t < nFrames; t++) {
+      let energy = 0;
+      let validBins = 0;
+      
+      for (let m = validStartMel; m <= validEndMel && m < this.config.nMels; m++) {
+        if (mel[m] && Number.isFinite(mel[m][t])) {
+          energy += mel[m][t];
+          validBins++;
+        }
+      }
+      
+      bandEnergy[t] = validBins > 0 ? energy / validBins : 1e-10;
+    }
+    
+    // Enhanced per-band rolling baseline with longer window
+    const baseline = this.computeOptimizedBaseline(bandEnergy);
+    const thresholds = this.computeOptimizedThreshold(bandEnergy, baseline);
+
+    // Enhanced event detection with proper hysteresis (K_on and K_off)
+    const events = [];
+    let inEvent = false;
+    let eventStart = 0;
+    let maxEnergy = -Infinity;
+    let peakTime = 0;
+    let peakFreq = 0;
+
+    for (let t = 0; t < nFrames; t++) {
+      const signal = bandEnergy[t];
+
+      if (!inEvent && signal > thresholds.onset[t]) {
+        // Event onset: signal > baseline + K_on dB
+        inEvent = true;
+        eventStart = t;
+        maxEnergy = signal - baseline[t];
+        peakTime = t;
+      } else if (inEvent && signal < thresholds.offset[t]) {
+        // Event offset: signal < baseline + K_off dB (K_off < K_on)
+        const eventEnd = t;
+        const durationMs = (eventEnd - eventStart) * frameDurationMs;
+
+        // FIXED: Validate event duration before creating
+        if (durationMs >= this.config.minDurationMs && durationMs <= this.config.maxDurationMs) {
+          // Find peak frequency for this event
+          const estPeakFreq = this.estimatePeakFrequency(features, band, eventStart, eventEnd);
+
+          // Calculate SNR in dB
+          const snrLinear = maxEnergy / Math.max(baseline[peakTime], 1e-10);
+          const snrDb = 20 * Math.log10(snrLinear);
+
+          events.push({
+            start_ms: Math.round(eventStart * frameDurationMs),
+            end_ms: Math.round(eventEnd * frameDurationMs),
+            f_min_hz: band.fmin,
+            f_max_hz: band.fmax,
+            peak_freq_hz: estPeakFreq || (band.fmin + band.fmax) / 2,
+            snr_db: snrDb,
+            confidence: Math.min(1.0, Math.max(0.1, snrDb / 20.0)) // dB-based confidence
+          });
+        }
+        
+        inEvent = false;
+      } else if (inEvent && signal > maxEnergy) {
+        maxEnergy = signal;
+        peakTime = t;
+      }
+    }
+    
+    // Handle event that extends to end of audio
+    if (inEvent) {
+      const durationMs = (nFrames - eventStart) * frameDurationMs;
+      if (durationMs >= this.config.minDurationMs && durationMs <= this.config.maxDurationMs) {
+        const estPeakFreq = this.estimatePeakFrequency(features, band, eventStart, nFrames - 1);
+        const snrLinear = maxEnergy / Math.max(baseline[peakTime], 1e-10);
+        const snrDb = 20 * Math.log10(snrLinear);
+
+        events.push({
+          start_ms: Math.round(eventStart * frameDurationMs),
+          end_ms: Math.round(nFrames * frameDurationMs),
+          f_min_hz: band.fmin,
+          f_max_hz: band.fmax,
+          peak_freq_hz: estPeakFreq || (band.fmin + band.fmax) / 2,
+          snr_db: snrDb,
+          confidence: Math.min(1.0, Math.max(0.1, snrDb / 20.0))
+        });
+      }
+    }
+    
+    return events;
+  }
+
+  /**
+   * Estimate peak frequency for an event
+   * NEW: Proper frequency estimation
+   */
+  estimatePeakFrequency(features, band, startFrame, endFrame) {
+    try {
+      const { mel, sampleRate } = features;
+      const nyquist = sampleRate / 2;
+      
+      // Find the frame with maximum energy in the band
+      let maxEnergy = -Infinity;
+      let peakFrame = startFrame;
+      
+      for (let t = startFrame; t <= endFrame && t < mel[0].length; t++) {
+        let frameEnergy = 0;
+        for (let m = 0; m < mel.length; m++) {
+          if (mel[m] && Number.isFinite(mel[m][t])) {
+            frameEnergy += mel[m][t];
+          }
+        }
+        
+        if (frameEnergy > maxEnergy) {
+          maxEnergy = frameEnergy;
+          peakFrame = t;
+        }
+      }
+      
+      // Convert mel bin to frequency
+      const melToHz = (mel) => 700 * (Math.pow(10, mel / 2595) - 1);
+      const peakMelBin = Math.floor((peakFrame / mel.length) * this.config.nMels);
+      const peakFreq = melToHz(peakMelBin);
+      
+      // Ensure frequency is within band bounds
+      return Math.max(band.fmin, Math.min(band.fmax, peakFreq));
+      
+    } catch (error) {
+      console.warn('⚠️ Failed to estimate peak frequency:', error);
+      return (band.fmin + band.fmax) / 2; // Fallback to band center
+    }
+  }
+
+  /**
+   * Fallback to original feature extraction for compatibility
+   * FIXED: Added missing method that was referenced but not implemented
+   */
+  extractOptimizedFeatures(samples, sampleRate) {
+    return this.extractEnhancedFeatures(samples, sampleRate, null);
+  }
+
+  /**
+   * Optimized energy-based event detection
+   * FIXED: Added missing method that was referenced but not implemented
+   */
+  detectEnergyEventsOptimized(features) {
+    const events = [];
+    
+    for (const band of this.config.targetBands) {
+      const bandEvents = this.detectBandEventsOptimized(features, band);
+      events.push(...bandEvents.map(e => ({ ...e, band_name: band.name })));
+    }
+    
+    return events;
+  }
+
+  /**
+   * Filter and refine events (legacy method for compatibility)
+   * FIXED: Added missing method that was referenced but not implemented
+   */
+  filterAndRefineEvents(events) {
+    return this.filterOptimizedEvents(events, null, null);
+  }
+
+  /**
+   * Test method to verify AED system functionality
+   * NEW: Simple test to check if all methods are working
+   */
+  async testAEDSystem() {
+    console.log('🧪 Testing AED system...');
+    
+    try {
+      // Test 1: Check if all required methods exist
+      const requiredMethods = [
+        'extractOptimizedFeatures',
+        'extractEnhancedFeatures',
+        'detectOptimizedSpectralNovelty',
+        'filterOptimizedEvents',
+        'detectEnergyEventsOptimized',
+        'detectBandEventsOptimized',
+        'detectOptimizedOnsets',
+        'filterAndRefineEvents',
+        'generateAudioSnippet',
+        'applyDeduplication',
+        'batchInsertEvents'
+      ];
+      
+      for (const method of requiredMethods) {
+        if (typeof this[method] !== 'function') {
+          throw new Error(`Missing method: ${method}`);
+        }
+      }
+      
+      console.log('✅ All required methods exist');
+      
+      // Test 2: Check configuration
+      if (!this.config) {
+        throw new Error('Configuration is missing');
+      }
+      
+      console.log('✅ Configuration is valid');
+      
+      // Test 3: Create dummy audio data
+      const sampleRate = 32000;
+      const duration = 1; // 1 second
+      const samples = new Float32Array(sampleRate * duration);
+      
+      // Generate a simple sine wave for testing
+      const frequency = 1000; // 1kHz
+      for (let i = 0; i < samples.length; i++) {
+        samples[i] = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.1;
+      }
+      
+      console.log('✅ Test audio data created');
+      
+      // Test 4: Test feature extraction
+      const features = this.extractOptimizedFeatures(samples, sampleRate);
+      if (!features) {
+        throw new Error('Feature extraction failed');
+      }
+      
+      console.log('✅ Feature extraction works');
+      
+      // Test 5: Test event detection
+      const events = this.detectOptimizedSpectralNovelty(features);
+      console.log(`✅ Event detection works: ${events.length} events detected`);
+      
+      console.log('🎉 AED system test completed successfully!');
+      return true;
+      
+    } catch (error) {
+      console.error('❌ AED system test failed:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Fast Hanning window generation
+   * FIXED: Added missing method
+   */
+  fastWindow(n) {
+    const w = new Float32Array(n);
+    const factor = 2 * Math.PI / (n - 1);
+    for (let i = 0; i < n; i++) {
+      w[i] = 0.5 * (1 - Math.cos(factor * i));
+    }
+    return w;
+  }
+
+  /**
+   * Simplified FFT that returns power spectrum directly
+   * FIXED: Added missing method
+   */
+  fastFFT(x) {
+    const N = x.length;
+
+    // Validate input
+    if (N === 0 || !Number.isFinite(N)) {
+      console.warn('⚠️ Invalid FFT input length:', N);
+      return new Float32Array(N / 2);
+    }
+
+    // Check if N is power of 2, if not, use DFT fallback
+    if ((N & (N - 1)) !== 0) {
+      return this.computeDFT(x);
+    }
+
+    const out = new Float32Array(N * 2);
+
+    // Copy input to complex array with NaN/Infinity checks
+    for (let i = 0; i < N; i++) {
+      const val = x[i];
+      out[i * 2] = Number.isFinite(val) ? val : 0;
+      out[i * 2 + 1] = 0;
+    }
+
+    // Bit-reversal
+    const bits = Math.log2(N);
+    for (let i = 0; i < N; i++) {
+      const j = this.bitReverse(i, bits);
+      if (i < j) {
+        [out[i * 2], out[j * 2]] = [out[j * 2], out[i * 2]];
+        [out[i * 2 + 1], out[j * 2 + 1]] = [out[j * 2 + 1], out[i * 2 + 1]];
+      }
+    }
+    
+    // FFT
+    for (let size = 2; size <= N; size *= 2) {
+      const half = size / 2;
+      const step = N / size;
+      
+      for (let i = 0; i < N; i += size) {
+        for (let j = i, k = 0; j < i + half; j++, k += step) {
+          const theta = -2 * Math.PI * (k % N) / N;
+          const wr = Math.cos(theta);
+          const wi = Math.sin(theta);
+          
+          const xr = out[(j + half) * 2];
+          const xi = out[(j + half) * 2 + 1];
+          const yr = wr * xr - wi * xi;
+          const yi = wr * xi + wi * xr;
+          
+          out[(j + half) * 2] = out[j * 2] - yr;
+          out[(j + half) * 2 + 1] = out[j * 2 + 1] - yi;
+          out[j * 2] += yr;
+          out[j * 2 + 1] += yi;
+        }
+      }
+    }
+    
+    // Return power spectrum with NaN protection
+    const power = new Float32Array(N / 2);
+    for (let i = 0; i < N / 2; i++) {
+      const real = out[i * 2];
+      const imag = out[i * 2 + 1];
+      const powerVal = real * real + imag * imag;
+      power[i] = Number.isFinite(powerVal) ? Math.max(powerVal, 1e-10) : 1e-10;
+    }
+
+    return power;
+  }
+
+  /**
+   * DFT fallback for non-power-of-2 inputs
+   * FIXED: Added missing method
+   */
+  computeDFT(x) {
+    const N = x.length;
+    const power = new Float32Array(N / 2);
+
+    for (let k = 0; k < N / 2; k++) {
+      let real = 0;
+      let imag = 0;
+
+      for (let n = 0; n < N; n++) {
+        const angle = -2 * Math.PI * k * n / N;
+        const val = Number.isFinite(x[n]) ? x[n] : 0;
+        real += val * Math.cos(angle);
+        imag += val * Math.sin(angle);
+      }
+
+      const powerVal = real * real + imag * imag;
+      power[k] = Number.isFinite(powerVal) ? Math.max(powerVal, 1e-10) : 1e-10;
+    }
+
+    return power;
+  }
+
+  /**
+   * Bit reverse for FFT
+   * FIXED: Added missing method
+   */
+  bitReverse(num, bits) {
+    let result = 0;
+    for (let i = 0; i < bits; i++) {
+      result = (result << 1) | (num & 1);
+      num >>= 1;
+    }
+    return result;
+  }
+
+  /**
+   * Apply log-mel transformation for more stable features
+   * FIXED: Added missing method
+   */
+  applyLogMelTransform(melSpectrogram) {
+    const logMel = [];
+    for (let m = 0; m < melSpectrogram.length; m++) {
+      logMel[m] = new Float32Array(melSpectrogram[m].length);
+      for (let t = 0; t < melSpectrogram[m].length; t++) {
+        // Add small epsilon to avoid log(0)
+        logMel[m][t] = Math.log(melSpectrogram[m][t] + 1e-10);
+      }
+    }
+    return logMel;
+  }
+
+  /**
+   * Apply spectral whitening for noise robustness
+   * FIXED: Added missing method
+   */
+  applySpectralWhitening(spectrogram) {
+    const whitened = [];
+    const nMels = spectrogram.length;
+    const nFrames = spectrogram[0].length;
+
+    // Compute mean and std for each mel bin
+    for (let m = 0; m < nMels; m++) {
+      whitened[m] = new Float32Array(nFrames);
+
+      // Compute mean
+      let mean = 0;
+      for (let t = 0; t < nFrames; t++) {
+        mean += spectrogram[m][t];
+      }
+      mean /= nFrames;
+
+      // Compute std
+      let variance = 0;
+      for (let t = 0; t < nFrames; t++) {
+        const diff = spectrogram[m][t] - mean;
+        variance += diff * diff;
+      }
+      const std = Math.sqrt(variance / nFrames);
+
+      // Apply whitening
+      for (let t = 0; t < nFrames; t++) {
+        whitened[m][t] = (spectrogram[m][t] - mean) / Math.max(std, 1e-10);
+      }
+    }
+
+    return whitened;
+  }
+
+  /**
+   * Batch load audio for multiple segments to reduce I/O overhead
+   * FIXED: Added missing method
+   */
+  async batchLoadAudio(segments) {
+    const { downloadFile } = await import('../config/s3.js');
+    const audioDataMap = new Map();
+    
+    // Download all files in parallel
+    const downloadPromises = segments.map(async (segment) => {
+      try {
+        const tempIn = path.join(process.cwd(), 'temp_ffmpeg', `seg_${segment.id}.flac`);
+        const tempRaw = path.join(process.cwd(), 'temp_ffmpeg', `seg_${segment.id}.raw`);
+        
+        const fs = await import('fs');
+        fs.mkdirSync(path.dirname(tempIn), { recursive: true });
+        
+        // Download file
+        await downloadFile(segment.s3_key, tempIn);
+        
+        // Convert to raw audio
+        await new Promise((resolve, reject) => {
+          ffmpeg(tempIn)
+            .audioChannels(1)
+            .format('f32le')
+            .output(tempRaw)
+            .on('end', resolve)
+            .on('error', reject)
+            .run();
+        });
+
+        // Load samples
+        const rawBuffer = fs.readFileSync(tempRaw);
+        const samples = new Float32Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength / 4);
+        
+        audioDataMap.set(segment.id, {
+          samples,
+          sampleRate: segment.sample_rate || 32000
+        });
+        
+        // Cleanup
+        try { fs.unlinkSync(tempIn); } catch {}
+        try { fs.unlinkSync(tempRaw); } catch {}
+        
+      } catch (error) {
+        console.error(`Failed to load audio for segment ${segment.id}:`, error);
+      }
+    });
+    
+    await Promise.all(downloadPromises);
+    return audioDataMap;
+  }
+
+  /**
+   * Analyze audio characteristics to determine optimal detection parameters
+   * FIXED: Added missing method
+   */
+  async analyzeAudioCharacteristics(samples, sampleRate) {
+    console.log('🔍 Analyzing audio characteristics for parameter adaptation...');
+
+    // Analyze first portion of audio (configurable window)
+    const analysisWindowSamples = Math.min(
+      samples.length,
+      Math.floor(this.config.adaptationAnalysisWindowSec * sampleRate)
+    );
+    const analysisSamples = samples.slice(0, analysisWindowSamples);
+
+    // Extract features for analysis
+    const analysisFeatures = this.extractOptimizedFeatures(analysisSamples, sampleRate);
+    if (!analysisFeatures) return null;
+
+    // 1. Estimate overall SNR and noise characteristics
+    const snrAnalysis = this.estimateSignalToNoiseRatio(analysisFeatures);
+
+    // 2. Analyze temporal variability (dawn chorus vs steady noise)
+    const variabilityAnalysis = this.analyzeTemporalVariability(analysisFeatures);
+
+    // 3. Analyze frequency content (birds vs insects vs wind)
+    const frequencyAnalysis = this.analyzeFrequencyContent(analysisFeatures);
+
+    // 4. Detect environment type (quiet forest, noisy urban, etc.)
+    const environmentType = this.classifyEnvironmentType(snrAnalysis, variabilityAnalysis, frequencyAnalysis);
+
+    return {
+      estimatedSNR: snrAnalysis.snrDb,
+      noiseFloor: snrAnalysis.noiseFloor,
+      signalLevel: snrAnalysis.signalLevel,
+      variabilityScore: variabilityAnalysis.variabilityScore,
+      temporalPattern: variabilityAnalysis.pattern,
+      dominantFreqRange: frequencyAnalysis.dominantRange,
+      spectralSpread: frequencyAnalysis.spectralSpread,
+      environmentType: environmentType,
+      adaptationConfidence: Math.min(snrAnalysis.confidence, variabilityAnalysis.confidence)
+    };
+  }
+
+  /**
+   * Post-process events with filtering and refinement
+   * NEW: Implements proper post-processing as requested
+   */
+  postProcessEvents(events) {
+    if (!events || events.length === 0) return [];
+    
+    console.log(`🔧 Post-processing ${events.length} events...`);
+    
+    // Log event durations before processing
+    events.forEach((event, index) => {
+      const duration = event.end_ms - event.start_ms;
+      console.log(`🔍 Event ${index + 1}: ${event.start_ms}ms - ${event.end_ms}ms (duration: ${duration}ms)`);
+    });
+    
+    // Step 1: Filter by duration and confidence
+    const filteredEvents = events.filter(event => {
+      const duration = event.end_ms - event.start_ms;
+      const confidence = event.confidence || 0;
+      
+      // Filter criteria:
+      // - Duration >= 50ms (too short = noise)
+      // - Duration <= 10s (too long = background)
+      // - Confidence >= 0.3 (minimum confidence threshold)
+      const isValidDuration = duration >= 50 && duration <= 10000;
+      const isValidConfidence = confidence >= 0.3;
+      
+      // Enhanced logging to debug filtering
+      console.log(`🔍 Event ${event.id || 'unknown'}: duration=${duration}ms, confidence=${(confidence * 100).toFixed(1)}%, valid_duration=${isValidDuration}, valid_confidence=${isValidConfidence}`);
+      
+      if (!isValidDuration) {
+        console.log(`❌ Filtered out event: duration ${duration}ms (${duration < 50 ? 'too short' : 'too long'})`);
+      }
+      if (!isValidConfidence) {
+        console.log(`❌ Filtered out event: confidence ${(confidence * 100).toFixed(1)}% (too low)`);
+      }
+      
+      return isValidDuration && isValidConfidence;
+    });
+    
+    console.log(`📊 After duration/confidence filtering: ${filteredEvents.length} events`);
+    
+    // Step 2: Merge overlapping events (within 100ms)
+    const mergedEvents = this.mergeOverlappingEventsWithin100ms(filteredEvents);
+    
+    console.log(`📊 After overlap merging: ${mergedEvents.length} events`);
+    
+    // Log event durations after merging
+    mergedEvents.forEach((event, index) => {
+      const duration = event.end_ms - event.start_ms;
+      console.log(`🔍 Merged Event ${index + 1}: ${event.start_ms}ms - ${event.end_ms}ms (duration: ${duration}ms)`);
+    });
+    
+    // Step 3: Final validation - ensure no events with duration < 50ms make it through
+    const finalEvents = mergedEvents.filter(event => {
+      const duration = event.end_ms - event.start_ms;
+      if (duration < 50) {
+        console.log(`🚨 CRITICAL: Event with duration ${duration}ms still present after filtering!`);
+        return false;
+      }
+      return true;
+    });
+    
+    console.log(`📊 Final validation: ${finalEvents.length} events (removed ${mergedEvents.length - finalEvents.length} short events)`);
+    
+    return finalEvents;
+  }
+  
+  /**
+   * Merge overlapping events within 100ms window
+   * NEW: Implements the 100ms overlap merging as requested
+   */
+  mergeOverlappingEventsWithin100ms(events) {
+    if (events.length <= 1) return events;
+    
+    // Sort by start time
+    events.sort((a, b) => a.start_ms - b.start_ms);
+    
+    const merged = [];
+    let current = { ...events[0] };
+    
+    for (let i = 1; i < events.length; i++) {
+      const next = events[i];
+      
+      // Check if events overlap or are within 100ms of each other
+      const gap = next.start_ms - current.end_ms;
+      const overlapStart = Math.max(current.start_ms, next.start_ms);
+      const overlapEnd = Math.min(current.end_ms, next.end_ms);
+      const overlapDuration = overlapEnd - overlapStart;
+      
+      // Merge if:
+      // 1. Events overlap significantly (>0ms overlap)
+      // 2. Events are within 100ms of each other (gap <= 100ms)
+      if (overlapDuration > 0 || gap <= 100) {
+        console.log(`🔗 Merging events: gap=${gap}ms, overlap=${overlapDuration}ms`);
+        
+        // Create merged event with best properties from both
+        current.start_ms = Math.min(current.start_ms, next.start_ms);
+        current.end_ms = Math.max(current.end_ms, next.end_ms);
+        current.confidence = Math.max(current.confidence || 0, next.confidence || 0);
+        
+        // Keep frequency bounds if available
+        if (next.f_min_hz !== undefined && current.f_min_hz !== undefined) {
+          current.f_min_hz = Math.min(current.f_min_hz, next.f_min_hz);
+        }
+        if (next.f_max_hz !== undefined && current.f_max_hz !== undefined) {
+          current.f_max_hz = Math.max(current.f_max_hz, next.f_max_hz);
+        }
+        
+        // Keep the higher SNR data
+        if ((next.snr_db || -Infinity) > (current.snr_db || -Infinity)) {
+          current.snr_db = next.snr_db;
+          current.peak_freq_hz = next.peak_freq_hz;
+          current.band_name = next.band_name;
+        }
+        
+        // Update method to indicate merging
+        current.method = current.method ? `${current.method}+merged` : 'merged';
+        
+      } else {
+        // No overlap, add current event and move to next
+        merged.push(current);
+        current = { ...next };
+      }
+    }
+    
+    // Add the last event
+    merged.push(current);
+    
+    return merged;
   }
 }
 

@@ -6,7 +6,8 @@ import {
   getRecordings,
   uploadRecording,
   deleteRecording,
-  getRecording
+  getRecording,
+  getAllRecordings
 } from '../controllers/recordingController.js';
 import {
   generateSegmentSpectrograms,
@@ -50,6 +51,7 @@ const validateUploadRecording = [
 ];
 
 // Routes
+router.get('/recordings', authenticateToken, getAllRecordings);
 router.get('/projects/:projectId/recordings', authenticateToken, getRecordings);
 router.get('/recordings/:recordingId', authenticateToken, getRecording);
 

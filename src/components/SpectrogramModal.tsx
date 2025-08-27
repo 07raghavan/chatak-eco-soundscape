@@ -172,48 +172,7 @@ export const SpectrogramModal: React.FC<SpectrogramModalProps> = ({
               </div>
             </div>
 
-            {/* AED Events */}
-            <div className="space-y-3">
-              <h3 className="font-semibold text-sm">
-                Detected Events ({events.length})
-              </h3>
-              {events.length > 0 ? (
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {events.map((event, index) => (
-                    <div 
-                      key={event.id || index} 
-                      className="flex items-center justify-between p-2 bg-gray-50 rounded text-xs"
-                    >
-                      <div className="space-y-1">
-                        <div className="font-medium">Event #{index + 1}</div>
-                        <div className="text-gray-600">
-                          {formatTime(event.start_ms)} - {formatTime(event.end_ms)}
-                        </div>
-                        {event.f_min_hz && event.f_max_hz && (
-                          <div className="text-gray-600">
-                            {event.f_min_hz.toFixed(0)} - {event.f_max_hz.toFixed(0)} Hz
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-right space-y-1">
-                        <div>
-                          <Badge variant="outline" className="text-xs">
-                            {event.confidence?.toFixed(2) || 'N/A'}
-                          </Badge>
-                        </div>
-                        {event.label && (
-                          <div className="text-gray-500">{event.label}</div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-sm text-gray-500 italic">
-                  No events detected in this segment
-                </div>
-              )}
-            </div>
+
           </div>
 
           {/* Help Text */}

@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
-import { getApprovedSegments, enqueueAEDForRecording, getAEDEventsForSegment, getAEDEventsForRecording, runAEDNow, runIndustryAEDForRecording, runOptimizedAEDForRecording, processAEDWithDeduplication, getDeduplicationStats, triggerDeduplication } from '../controllers/aedController.js';
+import { getApprovedSegments, enqueueAEDForRecording, getAEDEventsForSegment, getAEDEventsForRecording, runAEDNow, runIndustryAEDForRecording, runOptimizedAEDForRecording, runOptimizedAEDForAllSegments, processAEDWithDeduplication, getDeduplicationStats, triggerDeduplication, getAudioSnippetUrl } from '../controllers/aedController.js';
 
 const router = express.Router();
 
@@ -24,8 +24,14 @@ router.post('/recordings/:recordingId/aed/industry-standard', runIndustryAEDForR
 // NEW: Run optimized high-speed AED for entire recording (with progress streaming)
 router.post('/recordings/:recordingId/aed/optimized', runOptimizedAEDForRecording);
 
+// NEW: Run optimized AED for all segments (development/testing - no approval required)
+router.post('/recordings/:recordingId/aed/optimized-all-segments', runOptimizedAEDForAllSegments);
+
 // List AED events for a recording
 router.get('/recordings/:recordingId/aed-events', getAEDEventsForRecording);
+
+// NEW: Get signed URL for audio snippets (bypasses CORS issues)
+router.get('/audio-snippets/:snippetKey(*)/signed-url', getAudioSnippetUrl);
 
 // === CROSS-SEGMENT DEDUPLICATION ROUTES ===
 

@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import EcoForestBackground from "@/components/EcoForestBackground";
 import { useParams, useNavigate } from "react-router-dom";
-import { MapPin, Plus, Settings, BarChart3, Mic, FileText, Users, Upload, Play } from "lucide-react";
+import { MapPin, Plus, Settings, BarChart3, Mic, FileText, Users, Upload, Play, Bird, Network, Scissors } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PlatformNav } from "@/components/PlatformNav";
-import { BottomNavigation } from "@/components/BottomNavigation";
+import BottomNavigation from "@/components/BottomNavigation";
 import { useAuth } from "../contexts/AuthContext";
 import MultiSiteMapComponent from "@/components/MultiSiteMapComponent";
 import AudioUploadComponent from "@/components/AudioUploadComponent";
@@ -410,6 +410,30 @@ const ProjectPlatform = () => {
                     <Play className="w-4 h-4 mr-2" />
                     View Recordings
                   </Button>
+                  <Button 
+                    variant="ghost" 
+                    className="w-full justify-start"
+                    onClick={() => navigate(`/projects/${projectId}/clustering`)}
+                  >
+                    <Network className="w-4 h-4 mr-2" />
+                    Audio Clustering
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    className="w-full justify-start"
+                    onClick={() => navigate(`/projects/${projectId}/segmentation`)}
+                  >
+                    <Scissors className="w-4 h-4 mr-2" />
+                    Segmentation
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    className="w-full justify-start"
+                    onClick={() => navigate(`/projects/${projectId}/annotation`)}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Annotations
+                  </Button>
                 </CardContent>
               </Card>
 
@@ -595,6 +619,15 @@ const ProjectPlatform = () => {
                                  <Badge variant="outline" className="border-coral/30 text-coral">
                                    {recording.status}
                                  </Badge>
+                                 <Button
+                                   variant="outline"
+                                   size="sm"
+                                   className="text-coral border-coral hover:bg-coral hover:text-white"
+                                   onClick={() => navigate(`/recordings/${recording.id}/birdnet-aed`)}
+                                 >
+                                   <Bird className="w-4 h-4 mr-1" />
+                                   BirdNet AED
+                                 </Button>
                                  <Button
                                    variant="outline"
                                    size="sm"

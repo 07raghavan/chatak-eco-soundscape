@@ -2,10 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import dotenv from 'dotenv';
-import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import fs from 'fs';
+import path from 'path';
 
+// Import routes
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import projectRoutes from './routes/projects.js';
@@ -13,110 +15,62 @@ import siteRoutes from './routes/sites.js';
 import recordingRoutes from './routes/recordings.js';
 import segmentationRoutes from './routes/segmentation.js';
 import aedRoutes from './routes/aed.js';
+import birdnetAEDRoutes from './routes/birdnetAED.js';
 import spectrogramRoutes from './routes/spectrogram.js';
 import fastSpectrogramRoutes from './routes/fastSpectrogram.js';
+import annotationRoutes from './routes/annotation.js';
+import clusteringRoutes from './routes/clustering.js';
 
-// Load environment variables
-dotenv.config();
+// Import services
+import { getFileUrl } from './config/s3.js';
+import { db } from './config/database.js';
+import { QueryTypes } from 'sequelize';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      mediaSrc: ["'self'", "data:", "blob:"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: []
+    }
+  }
+}));
 
-// CORS configuration (provider-agnostic)
-const defaultOrigins = [
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:8080',
-  'http://localhost:3000'
-];
-const envOrigins = (process.env.ALLOWED_ORIGINS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins;
-
+// CORS configuration
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // allow non-browser tools
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error(`Not allowed by CORS: ${origin}`));
-  },
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.'
 });
-app.use(limiter);
+app.use('/api/', limiter);
 
 // Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve static files from uploads directory (dev/local only)
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
-
-// Local audio streaming (not used on serverless prod)
-app.get('/audio/:projectId/:siteId/:filename', (req, res) => {
-  const { projectId, siteId, filename } = req.params;
-  const filePath = path.join(process.cwd(), 'uploads', `project-${projectId}`, `site-${siteId}`, filename);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Audio file not found' });
-  }
-
-  const lower = filename.toLowerCase();
-  let contentType = 'application/octet-stream';
-  if (lower.endsWith('.mp3')) contentType = 'audio/mpeg';
-  else if (lower.endsWith('.wav')) contentType = 'audio/wav';
-  else if (lower.endsWith('.m4a')) contentType = 'audio/mp4';
-  else if (lower.endsWith('.flac')) contentType = 'audio/flac';
-
-  const stat = fs.statSync(filePath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
-
-  res.setHeader('Cache-Control', 'public, max-age=3600');
-  res.setHeader('Accept-Ranges', 'bytes');
-
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunkSize = end - start + 1;
-
-    if (start >= fileSize || end >= fileSize) {
-      res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
-      return res.end();
-    }
-
-    res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type': contentType
-    });
-
-    const stream = fs.createReadStream(filePath, { start, end });
-    stream.pipe(res);
-    stream.on('error', () => res.status(500).end());
-  } else {
-    res.writeHead(200, {
-      'Content-Length': fileSize,
-      'Content-Type': contentType
-    });
-    const stream = fs.createReadStream(filePath);
-    stream.pipe(res);
-    stream.on('error', () => res.status(500).end());
-  }
-});
+// Static file serving
+app.use('/uploads', express.static(join(__dirname, '../uploads')));
+app.use('/audio', express.static(join(__dirname, '../audio')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -130,9 +84,123 @@ app.use('/api/projects', projectRoutes);
 app.use('/api', siteRoutes);
 app.use('/api', recordingRoutes);
 app.use('/api', segmentationRoutes);
-app.use('/api', aedRoutes);
+app.use('/api/aed', aedRoutes);
+app.use('/api', birdnetAEDRoutes);
 app.use('/api', spectrogramRoutes);
 app.use('/api', fastSpectrogramRoutes);
+app.use('/api/annotation', annotationRoutes);
+app.use('/api', clusteringRoutes);
+
+// =====================================================
+// SPECTROGRAM GENERATION ENDPOINTS
+// =====================================================
+
+// Generate spectrogram for an audio event
+app.post('/api/spectrogram/generate/:eventId', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { width = 1000, height = 600, fmin = 0, fmax = 8000 } = req.body;
+    
+    console.log(`🎵 Generating spectrogram for event ${eventId}`);
+    
+    // Import spectrogram service dynamically to avoid circular imports
+    const { getOrGenerateSpectrogram } = await import('./services/spectrogramService.js');
+    
+    // Get event details and generate spectrogram
+    const result = await getOrGenerateSpectrogram(eventId, req.body.projectId, req.user.id);
+    
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(500).json({ error: result.error });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error generating spectrogram:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =====================================================
+// AUDIO SNIPPET ENDPOINTS FOR AED EVENTS
+// =====================================================
+
+// Get audio snippet for an AED event
+app.get('/api/audio/snippet/:s3Key', async (req, res) => {
+  try {
+    const { s3Key } = req.params;
+    
+    if (!s3Key) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'S3 key is required' 
+      });
+    }
+
+    console.log(`🎵 Requesting audio snippet: ${s3Key}`);
+
+    // Generate signed URL for the audio snippet
+    const signedUrl = await getFileUrl(s3Key);
+    
+    if (!signedUrl) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Audio snippet not found' 
+      });
+    }
+
+    // Redirect to the signed URL for direct audio streaming
+    res.redirect(signedUrl);
+
+  } catch (error) {
+    console.error('❌ Error getting audio snippet:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Get signed URL for audio segment (for AED event playback)
+app.get('/api/audio/segment/:s3Key', async (req, res) => {
+  try {
+    const { s3Key } = req.params;
+    
+    if (!s3Key) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'S3 key is required' 
+      });
+    }
+
+    console.log(`🎵 Requesting audio segment: ${s3Key}`);
+
+    // Generate signed URL for the audio segment
+    const signedUrl = await getFileUrl(s3Key);
+    
+    if (!signedUrl) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Audio segment not found' 
+      });
+    }
+
+    // Return the signed URL for the frontend to use
+    res.json({
+      success: true,
+      signedUrl: signedUrl,
+      s3Key: s3Key,
+      expiresIn: 3600
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting audio segment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
 
 // Test endpoints
 app.get('/api/test', (req, res) => {
@@ -156,19 +224,4 @@ app.get('/api/test-audio/:projectId/:siteId/:filename', (req, res) => {
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found', path: req.originalUrl, method: req.method });
-});
-
 export default app;
-
-
-
-

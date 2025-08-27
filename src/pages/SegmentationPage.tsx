@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 import { PlatformNav } from "@/components/PlatformNav";
-import { BottomNavigation } from "@/components/BottomNavigation";
+import BottomNavigation from "@/components/BottomNavigation";
 import EcoForestBackground from "@/components/EcoForestBackground";
 import { useAppearance } from "@/contexts/AppearanceContext";
 import { getRecordings, getSegmentsForRecording, approveSegment, rejectSegment, createSegmentationJob, getBackgroundSegmentationStatus, clearBackgroundSegmentationStatus, type Recording } from "@/lib/api";
@@ -74,6 +74,9 @@ const SegmentationPage = () => {
   const [maxDuration, setMaxDuration] = useState<string>('');
   const [silenceThreshold, setSilenceThreshold] = useState<string>('');
 
+  // Track when segments were just loaded
+  const [segmentsJustLoaded, setSegmentsJustLoaded] = useState(false);
+
   useEffect(() => {
     if (!projectId) return;
     getRecordings(projectId).then(setRecordings).catch(() => {});
@@ -124,6 +127,19 @@ const SegmentationPage = () => {
     checkBackgroundStatus(selectedRecordingId);
   }, [selectedRecordingId]);
 
+  // Auto-refresh segments when selected recording changes
+  useEffect(() => {
+    if (!selectedRecordingId) return;
+    
+    // Load segments for the newly selected recording
+    loadSegments(selectedRecordingId);
+    
+    // If this recording is also the viewer recording, refresh viewer segments
+    if (viewerRecordingId === selectedRecordingId) {
+      loadViewerSegments(selectedRecordingId);
+    }
+  }, [selectedRecordingId, viewerRecordingId]);
+
   // Poll for background segmentation status
   useEffect(() => {
     if (!segmentationProgress.isRunning || !selectedRecordingId || isPolling) return;
@@ -141,9 +157,20 @@ const SegmentationPage = () => {
             status: 'completed'
           });
 
-          // Refresh segments
+          // Refresh segments for both local state and viewer
           await loadSegments(selectedRecordingId);
+          if (viewerRecordingId === selectedRecordingId) {
+            await loadViewerSegments(selectedRecordingId);
+          }
           await loadGlobalStats();
+
+          // Show success toast with segment count
+          const segmentCount = segments.length;
+          toast({
+            title: "🎉 Segmentation Complete!",
+            description: `Successfully created ${segmentCount} segment${segmentCount !== 1 ? 's' : ''}. Results are now visible in the Clips Viewer tab.`,
+            duration: 5000,
+          });
 
           // Clear status after showing success
           setTimeout(() => {
@@ -226,8 +253,65 @@ const SegmentationPage = () => {
   };
 
   const loadSegments = async (rid: number) => {
-    const segs = await getSegmentsForRecording(rid);
-    setSegments(segs);
+    setLoading(true);
+    try {
+      const segs = await getSegmentsForRecording(rid);
+      setSegments(segs);
+      console.log(`✅ Loaded ${segs.length} segments for recording ${rid}`);
+      
+      // Set flag to show segments were just loaded
+      if (segs.length > 0) {
+        setSegmentsJustLoaded(true);
+        // Clear the flag after 5 seconds
+        setTimeout(() => setSegmentsJustLoaded(false), 5000);
+      }
+    } catch (err) {
+      console.error('Failed to load segments:', err);
+      setSegments([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Refresh all segment data for the current recording
+  const refreshAllSegments = async () => {
+    if (!selectedRecordingId) return;
+    
+    try {
+      // Show loading state
+      const refreshButton = document.querySelector('[data-refresh-segments]');
+      if (refreshButton) {
+        refreshButton.innerHTML = '<RefreshCw className="w-3 h-3 mr-1 animate-spin" /> Refreshing...';
+        refreshButton.disabled = true;
+      }
+      
+      await loadSegments(selectedRecordingId);
+      if (viewerRecordingId === selectedRecordingId) {
+        await loadViewerSegments(selectedRecordingId);
+      }
+      await loadGlobalStats();
+      
+      toast({
+        title: "✅ Segments Refreshed",
+        description: "Segment data has been updated.",
+        duration: 2000,
+      });
+    } catch (err) {
+      console.error('Failed to refresh segments:', err);
+      toast({
+        title: "❌ Refresh Failed",
+        description: "Failed to refresh segment data.",
+        variant: "destructive",
+        duration: 3000,
+      });
+    } finally {
+      // Reset button state
+      const refreshButton = document.querySelector('[data-refresh-segments]');
+      if (refreshButton) {
+        refreshButton.innerHTML = '<RefreshCw className="w-3 h-3 mr-1" /> Refresh';
+        refreshButton.disabled = false;
+      }
+    }
   };
 
   // loadJobs function removed since we're using direct processing
@@ -429,11 +513,14 @@ const SegmentationPage = () => {
 
         toast({
           title: "Short Clip Processed",
-          description: `Clip processed as single segment (${result.segments?.length || 0} segment created).`,
+          description: `Clip processed as single segment (${result.segments?.length || 0} segment created). Results are now visible in the Clips Viewer tab.`,
         });
 
-        // Refresh segments immediately
+        // Refresh segments immediately for both local state and viewer
         await loadSegments(selectedRecordingId);
+        if (viewerRecordingId === selectedRecordingId) {
+          await loadViewerSegments(selectedRecordingId);
+        }
         await loadGlobalStats();
 
         // Clear progress after showing success
@@ -551,7 +638,12 @@ const SegmentationPage = () => {
               <Tabs defaultValue="segmentation" className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="segmentation">Segmentation</TabsTrigger>
-                  <TabsTrigger value="clips">Clips Viewer</TabsTrigger>
+                  <TabsTrigger value="clips" onClick={() => {
+                    // Auto-refresh segments when switching to clips tab
+                    if (selectedRecordingId && viewerRecordingId === selectedRecordingId) {
+                      loadViewerSegments(selectedRecordingId);
+                    }
+                  }}>Clips Viewer</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="segmentation" className="mt-6">
@@ -559,7 +651,21 @@ const SegmentationPage = () => {
                 <div className="grid md:grid-cols-2 gap-6">
                   <div className="space-y-4">
                     <div>
-                      <Label className="text-green-700">Recording</Label>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-green-700">Recording</Label>
+                        {selectedRecordingId && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={refreshAllSegments}
+                            className="h-8 px-3 text-xs"
+                            data-refresh-segments
+                          >
+                            <RefreshCw className="w-3 h-3 mr-1" />
+                            Refresh
+                          </Button>
+                        )}
+                      </div>
                       <Select onValueChange={async (v)=> {
                         const rid = Number(v);
                         setSelectedRecordingId(rid);
@@ -718,15 +824,26 @@ const SegmentationPage = () => {
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-green-700 font-semibold">Segmented Clips</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-green-700 font-semibold">Segmented Clips</h3>
+                      {segmentsJustLoaded && (
+                        <Badge variant="default" className="bg-green-100 text-green-700 border-green-300">
+                          Just Updated
+                        </Badge>
+                      )}
+                    </div>
                     {selectedRecordingId && (
-                      <Button variant="outline" onClick={() => {
-                        loadSegments(selectedRecordingId);
-                        loadGlobalStats();
-                      }} className="border-green-300 text-green-700 hover:bg-green-50">Refresh</Button>
+                      <Button variant="outline" onClick={refreshAllSegments} className="border-green-300 text-green-700 hover:bg-green-50">Refresh</Button>
                     )}
                   </div>
-                  {segments.length === 0 ? (
+                  {loading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="flex items-center gap-2 text-green-600">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Loading segments...</span>
+                      </div>
+                    </div>
+                  ) : segments.length === 0 ? (
                     <p className="text-green-700/80 text-sm">No segments yet. Create a job to begin.</p>
                   ) : (
                     <div className="space-y-6">
@@ -825,9 +942,46 @@ const SegmentationPage = () => {
                       <>
                         {/* Recording Info */}
                         <div className="p-4 bg-green-50 rounded-lg">
-                          <h3 className="text-green-800 font-semibold mb-2">
-                            Recording: {recordings.find(r => r.id === viewerRecordingId)?.name}
-                          </h3>
+                                                      <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-green-800 font-semibold">
+                                  Recording: {recordings.find(r => r.id === viewerRecordingId)?.name}
+                                </h3>
+                                {segmentsJustLoaded && viewerRecordingId === selectedRecordingId && (
+                                  <Badge variant="default" className="bg-green-100 text-green-700 border-green-300 text-xs">
+                                    Just Updated
+                                  </Badge>
+                                )}
+                              </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                const btn = event?.target as HTMLButtonElement;
+                                if (btn) {
+                                  btn.innerHTML = '<RefreshCw className="w-3 h-3 mr-1 animate-spin" /> Refreshing...';
+                                  btn.disabled = true;
+                                }
+                                try {
+                                  await loadViewerSegments(viewerRecordingId);
+                                  toast({
+                                    title: "✅ Clips Refreshed",
+                                    description: "Segment clips have been updated.",
+                                    duration: 2000,
+                                  });
+                                } finally {
+                                  if (btn) {
+                                    btn.innerHTML = '<RefreshCw className="w-3 h-3 mr-1" /> Refresh';
+                                    btn.disabled = false;
+                                  }
+                                }
+                              }}
+                              className="h-8 px-3 text-xs"
+                            >
+                              <RefreshCw className="w-3 h-3 mr-1" />
+                              Refresh
+                            </Button>
+                          </div>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-green-700">
                             <div>Duration: {recordings.find(r => r.id === viewerRecordingId)?.duration_seconds ? `${Math.round(recordings.find(r => r.id === viewerRecordingId)!.duration_seconds)}s` : 'Unknown'}</div>
                             <div>File Size: {recordings.find(r => r.id === viewerRecordingId)?.file_size ? `${Math.round(recordings.find(r => r.id === viewerRecordingId)!.file_size / 1024 / 1024)}MB` : 'Unknown'}</div>

@@ -296,6 +296,40 @@ const getFileUrl = async (filePath) => {
   return `/uploads/${filePath}`;
 };
 
+// Get signed URL for audio snippets with optimized settings
+const getAudioSnippetUrl = async (snippetKey) => {
+  console.log('🎵 Generating signed URL for audio snippet:', snippetKey);
+
+  if (isS3Configured && s3 && BUCKET_NAME) {
+    try {
+      // Shorter expiration for snippets (1 hour) since they're smaller and more frequently accessed
+      const expiresSeconds = parseInt(process.env.S3_SNIPPET_URL_EXPIRES || '3600'); // 1 hour
+
+      const command = new GetObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: snippetKey,
+        ResponseContentType: 'audio/wav',
+        ResponseCacheControl: 'public, max-age=1800' // Cache for 30 minutes
+      });
+      
+      const signedUrl = await getSignedUrl(s3, command, { expiresIn: expiresSeconds });
+      console.log('✅ Generated signed URL for audio snippet');
+      return signedUrl;
+    } catch (err) {
+      console.error('❌ Failed to generate signed URL for audio snippet:', err.message);
+      throw err;
+    }
+  }
+
+  // Fallback for non-S3 environments
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('S3 is not properly configured for audio snippets in production');
+  }
+
+  // Development fallback
+  return `/api/aed/audio-snippets/${encodeURIComponent(snippetKey)}`;
+};
+
 // Download file by key to a local path; when S3 is not configured, read from local uploads
 const downloadFile = async (s3Key, localPath) => {
   const localSource = path.join(process.cwd(), 'uploads', s3Key);
@@ -376,5 +410,6 @@ export {
   getFileUrl,
   checkS3Access,
   downloadFile,
-  uploadFile
+  uploadFile,
+  getAudioSnippetUrl
 }; 

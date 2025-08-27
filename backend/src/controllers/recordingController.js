@@ -277,6 +277,57 @@ export const deleteRecording = async (req, res) => {
   }
 };
 
+// Get all recordings for the current user
+export const getAllRecordings = async (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production' && !isS3Configured) {
+      return res.status(503).json({
+        error: 'S3 is not configured for signed URLs in production. Set AWS_S3_BUCKET_NAME, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY.'
+      });
+    }
+    
+    const userId = req.user.id;
+
+    // Get all recordings for the user across all projects
+    const recordings = await db.query(`
+      SELECT 
+        r.id,
+        r.name,
+        r.description,
+        r.file_path,
+        r.file_size,
+        r.duration_seconds,
+        r.recording_date,
+        r.status,
+        r.created_at,
+        r.updated_at,
+        s.name as site_name,
+        s.latitude as site_latitude,
+        s.longitude as site_longitude,
+        p.name as project_name
+      FROM recordings r
+      JOIN sites s ON r.site_id = s.id
+      JOIN projects p ON r.project_id = p.id
+      WHERE p.user_id = :userId
+      ORDER BY r.created_at DESC
+    `, {
+      replacements: { userId },
+      type: QueryTypes.SELECT
+    });
+
+    // Add file URLs to recordings
+    const recordingsWithUrls = await Promise.all(recordings.map(async (recording) => ({
+      ...recording,
+      file_url: await getFileUrl(recording.file_path)
+    })));
+
+    res.json({ recordings: recordingsWithUrls });
+  } catch (error) {
+    console.error('❌ Get all recordings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 // Get recording details
 export const getRecording = async (req, res) => {
   try {

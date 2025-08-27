@@ -57,7 +57,8 @@ const chooseSampleRateFromParams = (params = {}) => {
   if (explicitSr) return explicitSr;
   if (maxHz && maxHz >= 20000) return 96000;    // bats/ultrasonic
   if (maxHz && maxHz >= 12000) return 44100;    // up to 12–20 kHz
-  return 32000;                                 // targets ≤ 8 kHz (birds)
+  if (maxHz && maxHz >= 8000) return 22050;     // 8-12 kHz (optimized for birds)
+  return 16000;                                 // targets ≤ 8 kHz (birds) - Nyquist at 8kHz
 };
 
 // Normalize to FLAC mono at target sample rate (optimized for speed)
@@ -70,12 +71,19 @@ const normalizeToFlac = async (inputUrl, targetPath, targetSr) => {
 const estimateSilencePct = async (inputPath, minSilenceDb = -35, minSilenceSec = 0.5) => {
   try {
     const { stderr } = await runCmd(FFMPEG_PATH, ['-i', inputPath, '-af', `silencedetect=noise=${minSilenceDb}dB:d=${minSilenceSec}`, '-f', 'null', '-']);
-    const matches = stderr.match(/silence_duration: ([0-9.]+)/g) || [];
-    const durations = matches.map(m => parseFloat(m.split(': ')[1])).filter(Number.isFinite);
-    const totalSilence = durations.reduce((a,b)=>a+b,0);
+    
+    // Extract both silence start and end points for complete boundary detection
+    const silenceStarts = [...stderr.matchAll(/silence_start: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    const silenceEnds = [...stderr.matchAll(/silence_end: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    const silenceDurations = [...stderr.matchAll(/silence_duration: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    
+    // Calculate total silence time from durations (more reliable)
+    const totalSilence = silenceDurations.reduce((a,b)=>a+b,0);
+    
     const meta = await ffprobeJson(inputPath);
     const dur = parseFloat(meta?.format?.duration || '0');
     if (!dur || dur <= 0) return null;
+    
     return Math.max(0, Math.min(100, (totalSilence / dur) * 100));
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -96,13 +104,44 @@ const estimateRmsDb = async (inputPath) => {
 
 const estimateClippingPct = async (inputPath) => {
   try {
-    const { stderr } = await runCmd(FFMPEG_PATH, ['-i', inputPath, '-af', 'astats=metadata=1:reset=1', '-f', 'null', '-']);
-    const peaks = [...stderr.matchAll(/Peak_level dB:\s*(-?[0-9.]+)/g)].map(m => parseFloat(m[1]));
-    if (peaks.length === 0) return null;
-    const clippedFrames = peaks.filter((db) => db >= 0).length;
-    return Math.max(0, Math.min(100, (clippedFrames / peaks.length) * 100));
-  } catch {}
-  return null;
+    // Use volumedetect filter which actually outputs peak levels
+    const { stderr } = await runCmd(FFMPEG_PATH, ['-i', inputPath, '-af', 'volumedetect', '-f', 'null', '-']);
+    
+    // Extract peak level from volumedetect output
+    const peakMatch = stderr.match(/max_volume:\s*(-?[0-9.]+) dB/);
+    if (!peakMatch) {
+      console.warn('⚠️ No peak level found in volumedetect output for:', inputPath);
+      return null;
+    }
+    
+    const peakDb = parseFloat(peakMatch[1]);
+    
+    // Clipping detection logic:
+    // - 0 dB = maximum amplitude (no headroom)
+    // - Positive dB = clipping (exceeds maximum)
+    // - Negative dB = safe (has headroom)
+    
+    if (peakDb >= 0) {
+      // Clipping detected - calculate severity
+      // 0 dB = 100% clipping, -6 dB = 50% clipping, etc.
+      const clippingSeverity = Math.min(100, Math.max(0, (peakDb + 6) * 16.67)); // Scale 0dB to 100%
+      console.log(`🎵 Clipping detected: ${peakDb.toFixed(2)}dB = ${clippingSeverity.toFixed(1)}% severity`);
+      return clippingSeverity;
+    } else if (peakDb >= -1) {
+      // Very close to clipping (0-1 dB headroom)
+      return 5; // 5% clipping risk
+    } else if (peakDb >= -3) {
+      // Low headroom (1-3 dB)
+      return 2; // 2% clipping risk
+    } else {
+      // Safe headroom (>3 dB)
+      return 0;
+    }
+    
+  } catch (error) {
+    console.error('❌ Error estimating clipping percentage for:', inputPath, error.message);
+    return null;
+  }
 };
 
 const createSegmentRow = async (recordingId, s3Key, startMs, endMs, durationMs, qc) => {
@@ -222,9 +261,22 @@ const processSegment = async (segment, index, normalizedPath, workDir, recording
   ]);
   if (performanceMetrics) performanceMetrics.ffmpeg_operations += 3;
 
-  // QC decision
-  const qcStatus = (silencePct !== null && silencePct > 80) ||
-                  (clippingPct !== null && clippingPct > 10) ? 'fail' : 'pass';
+  // Note: Band energy and crest factor are not currently used in the system
+  // Keeping them as NULL to avoid unnecessary processing
+
+  // QC decision - more nuanced quality assessment
+const qcStatus = (() => {
+  // Fail conditions
+  if (silencePct !== null && silencePct > 90) return 'fail'; // Too much silence
+  if (clippingPct !== null && clippingPct > 15) return 'fail'; // Too much clipping
+  
+  // Review conditions
+  if (silencePct !== null && silencePct > 70) return 'review'; // High silence, needs review
+  if (clippingPct !== null && clippingPct > 5) return 'review'; // Some clipping, needs review
+  
+  // Pass conditions
+  return 'pass';
+})();
 
   const key = `segments/recording-${recordingId}/segment_${String(index).padStart(5,'0')}.flac`;
 
@@ -272,10 +324,10 @@ const processSegment = async (segment, index, normalizedPath, workDir, recording
     console.warn(`⚠️ Failed to cleanup ${outPath}:`, cleanupErr.message);
   }
 
-  // Use actual duration for database (sample-accurate)
-  const startMs = Math.round(segment.start * 1000);
-  const endMs = Math.round((segment.start + actualDur) * 1000);
-  const durMs = Math.round(actualDur * 1000);
+  // Use planned boundaries consistently for accurate timing
+const startMs = Math.round(segment.start * 1000);
+const endMs = Math.round(segment.end * 1000); // Use planned end, not actual
+const durMs = endMs - startMs; // Calculate from boundaries for consistency
 
   return {
     recordingId,
@@ -288,6 +340,10 @@ const processSegment = async (segment, index, normalizedPath, workDir, recording
       silence_pct: silencePct,
       clipping_pct: clippingPct,
       rms_db: rmsDb,
+      band_energy_low: null,  // Not currently used
+      band_energy_mid: null,  // Not currently used
+      band_energy_high: null, // Not currently used
+      crest_factor: null,     // Not currently used
       qc_status: qcStatus
     }
   };
@@ -591,14 +647,25 @@ export const runSegmentationWithProgress = async (recordingId, params = {}, jobI
 
     await updateProgress(30, 'Detecting silence points...');
 
-    // Silence detection
-    const backoffSec = params.silence_backoff_sec ?? 5;
+    // Silence detection with adaptive backoff
     const minSilenceDb = params.min_silence_db ?? -35;
     const minSilenceSec = params.min_silence_sec ?? 0.5;
+    
+    // FIX: Adaptive backoff based on audio characteristics
+    const avgSegmentLength = segLen;
+    const backoffSec = Math.min(Math.max(avgSegmentLength * 0.1, 1), 10); // 10% of segment length, min 1s, max 10s
+    
+    console.log(`🔍 Adaptive silence detection: backoff=${backoffSec.toFixed(1)}s (${(backoffSec/avgSegmentLength*100).toFixed(1)}% of segment length)`);
     const { stderr: sil } = await runCmd(FFMPEG_PATH, ['-i', normalizedPath, '-af', `silencedetect=noise=${minSilenceDb}dB:d=${minSilenceSec}`, '-f', 'null', '-']);
     performanceMetrics.ffmpeg_operations++;
-    const silenceEnds = [...sil.matchAll(/silence_end: ([0-9.]+) \| silence_duration: ([0-9.]+)/g)].map(m => ({ end: parseFloat(m[1]), dur: parseFloat(m[2]) }));
-    const cutPoints = silenceEnds.map(s => s.end);
+    
+    // FIX: Use both silence start and end points for complete boundary detection
+    const silenceStarts = [...sil.matchAll(/silence_start: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    const silenceEnds = [...sil.matchAll(/silence_end: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    const silenceDurations = [...sil.matchAll(/silence_duration: ([0-9.]+)/g)].map(m => parseFloat(m[2])).filter(Number.isFinite);
+    
+    // Combine all silence points for better cut point selection
+    const cutPoints = [...silenceStarts, ...silenceEnds].sort((a, b) => a - b);
 
     const overlapSec = (segLen * overlapPct) / 100;
     const segmentsPlanned = [];
@@ -625,7 +692,13 @@ export const runSegmentationWithProgress = async (recordingId, params = {}, jobI
       }
 
       segmentsPlanned.push({ start: currentStart, end: actualEnd });
-      currentStart = Math.max(actualEnd - overlapSec, actualEnd);
+      // FIX: Proper overlap calculation - move back by overlap amount
+      currentStart = actualEnd - overlapSec;
+      
+      // Ensure we don't go backwards or create infinite loops
+      if (currentStart <= segmentsPlanned[segmentsPlanned.length - 1].start) {
+        currentStart = segmentsPlanned[segmentsPlanned.length - 1].start + 1;
+      }
 
       if (actualEnd >= durationSec) break;
     }
@@ -964,25 +1037,43 @@ export const runSegmentationDirect = async (recordingId, params = {}) => {
     const targetSr = chooseSampleRateFromParams(params);
     await normalizeToFlac(inputUrl, normalizedPath, targetSr);
 
-    // Silence detection for better segmentation quality
-    const backoffSec = 5;
+    // Silence detection for better segmentation quality with adaptive backoff
     const minSilenceDb = -35;
     const minSilenceSec = 0.5;
+    
+    // FIX: Adaptive backoff based on audio characteristics
+    const avgSegmentLength = segLen;
+    const backoffSec = Math.min(Math.max(avgSegmentLength * 0.1, 1), 10); // 10% of segment length, min 1s, max 10s
+    
+    console.log(`🔍 Adaptive silence detection: backoff=${backoffSec.toFixed(1)}s (${(backoffSec/avgSegmentLength*100).toFixed(1)}% of segment length)`);
     const { stderr: sil } = await runCmd(FFMPEG_PATH, ['-i', normalizedPath, '-af', `silencedetect=noise=${minSilenceDb}dB:d=${minSilenceSec}`, '-f', 'null', '-']);
-    const silenceEnds = [...sil.matchAll(/silence_end: ([0-9.]+) \| silence_duration: ([0-9.]+)/g)].map(m => ({ end: parseFloat(m[1]), dur: parseFloat(m[2]) }));
-    const cutPoints = silenceEnds.map(s => s.end);
+    
+    // FIX: Use both silence start and end points for complete boundary detection
+    const silenceStarts = [...sil.matchAll(/silence_start: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    const silenceEnds = [...sil.matchAll(/silence_end: ([0-9.]+)/g)].map(m => parseFloat(m[1])).filter(Number.isFinite);
+    
+    // Combine all silence points for better cut point selection
+    const cutPoints = [...silenceStarts, ...silenceEnds].sort((a, b) => a - b);
 
     const overlapSec = (segLen * overlapPct) / 100;
     const segmentsPlanned = [];
-    const stepSize = overlapSec > 0 ? segLen - overlapSec : segLen;
     let t = 0;
+    
     while (t < durationSec) {
       const hardEnd = Math.min(durationSec, t + segLen);
       const searchStart = Math.max(t, hardEnd - backoffSec);
       const candidate = cutPoints.filter(cp => cp >= searchStart && cp <= hardEnd).sort((a,b)=>Math.abs(hardEnd - a) - Math.abs(hardEnd - b))[0];
       const segmentEnd = candidate ?? hardEnd;
       segmentsPlanned.push({ start: t, end: segmentEnd });
-      t += stepSize;
+      
+      // FIX: Proper overlap calculation - move back by overlap amount
+      t = segmentEnd - overlapSec;
+      
+      // Ensure we don't go backwards or create infinite loops
+      if (t <= segmentsPlanned[segmentsPlanned.length - 1].start) {
+        t = segmentsPlanned[segmentsPlanned.length - 1].start + 1;
+      }
+      
       if (t >= durationSec) break;
       if (durationSec - t < segLen * 0.3) { segmentsPlanned[segmentsPlanned.length - 1].end = durationSec; break; }
     }

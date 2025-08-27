@@ -312,44 +312,29 @@ export const getAEDEventsForViewport = async (
 // =================
 
 /**
- * Process AED for a segment using the band-adaptive algorithm
+ * Enqueue AED for all approved segments in a recording
  */
-// Enqueue AED for all approved segments in a recording
-export const enqueueAEDForRecording = async (
-  recordingId: number,
-  params: {
-    sample_rate?: number;
-    min_duration_ms?: number;
-    merge_gap_ms?: number;
-    k_on_db?: number;
-    k_off_db?: number;
-  } = {}
-) => {
-  return apiRequest(`/api/recordings/${recordingId}/aed/enqueue`, {
-    method: 'POST',
-    body: JSON.stringify({ params })
-  });
-};
-
-// Run AED synchronously for selected segments of a recording
-export const runAEDNow = async (
-  recordingId: number,
-  segmentIds: number[]
-) => {
-  return apiRequest(`/api/recordings/${recordingId}/aed/run-now`, {
-    method: 'POST',
-    body: JSON.stringify({ recording_id: recordingId, segment_ids: segmentIds })
+export const enqueueAEDForRecording = async (recordingId: number) => {
+  return apiRequest(`/api/aed/recordings/${recordingId}/aed/enqueue`, {
+    method: 'POST'
   });
 };
 
 /**
- * Run industry-standard AED for entire recording using approved segments
+ * Run AED synchronously for selected segments
  */
-export const runIndustryAEDForRecording = async (
-  recordingId: number,
-  config: object = {}
-) => {
-  return apiRequest(`/api/recordings/${recordingId}/aed/industry-standard`, {
+export const runAEDNow = async (recordingId: number, segmentIds: number[]) => {
+  return apiRequest(`/api/aed/recordings/${recordingId}/aed/run-now`, {
+    method: 'POST',
+    body: JSON.stringify({ segmentIds })
+  });
+};
+
+/**
+ * Run industry-standard AED for entire recording
+ */
+export const runIndustryAEDForRecording = async (recordingId: number, config: object = {}) => {
+  return apiRequest(`/api/aed/recordings/${recordingId}/aed/industry-standard`, {
     method: 'POST',
     body: JSON.stringify({ config })
   });
@@ -366,7 +351,67 @@ export const runOptimizedAEDForRecording = async (
   config: object = {},
   onProgress?: (percent: number, message: string) => void
 ) => {
-  const response = await fetch(`${API_BASE_URL}/api/recordings/${recordingId}/aed/optimized`, {
+  const response = await fetch(`${API_BASE_URL}/api/aed/recordings/${recordingId}/aed/optimized`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${getToken()}`
+    },
+    body: JSON.stringify({ config })
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let result = null;
+
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            
+            if (data.progress !== undefined && onProgress) {
+              onProgress(data.progress, data.message || '');
+            }
+            
+            if (data.complete && data.result) {
+              result = data.result;
+            }
+            
+            if (data.error) {
+              throw new Error(data.error);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  return result;
+};
+
+/**
+ * Run optimized AED for all segments (development/testing - no approval required)
+ */
+export const runOptimizedAEDForAllSegments = async (
+  recordingId: number,
+  config: object = {},
+  onProgress?: (percent: number, message: string) => void
+) => {
+  const response = await fetch(`${API_BASE_URL}/api/aed/recordings/${recordingId}/aed/optimized-all-segments`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -485,9 +530,9 @@ export const getAEDEventsForSegment = async (segmentId: number) => {
   return data.events as any[];
 };
 
-export const getAEDEventsForRecording = async (recordingId: number) => {
-  const data = await apiRequest(`/api/recordings/${recordingId}/aed-events`, { method: 'GET' });
-  return data.events as any[];
+export const getAEDEventsForRecording = async (recordingId: number): Promise<any[]> => {
+  const data = await apiRequest(`/api/aed/recordings/${recordingId}/aed-events`, { method: 'GET' });
+  return data.events || [];
 };
 
 /**
@@ -774,4 +819,46 @@ export const getApprovedSegmentsForSpectrogram = async (recordingId: number) => 
     start_seconds: (segment.start_ms || 0) / 1000,
     end_seconds: (segment.end_ms || 0) / 1000
   }));
+};
+
+// Get audio snippet signed URL from backend
+export const getAudioSnippetSignedUrl = async (snippetKey: string): Promise<string> => {
+  const data = await apiRequest(`/api/aed/audio-snippets/${encodeURIComponent(snippetKey)}/signed-url`, { method: 'GET' });
+  return data.signedUrl;
+};
+
+// Get AED status for a recording
+export const getAEDStatus = async (recordingId: number) => {
+  const data = await apiRequest(`/api/aed/recordings/${recordingId}/aed`, { method: 'GET' });
+  return data;
+};
+
+// Get AED events for a recording with optional filtering
+export const getAEDEvents = async (
+  recordingId: number,
+  options: {
+    start_ms?: number;
+    end_ms?: number;
+    min_confidence?: number;
+    max_confidence?: number;
+    band_name?: string;
+    limit?: number;
+    offset?: number;
+  } = {}
+) => {
+  const params = new URLSearchParams();
+  Object.entries(options).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      params.append(key, value.toString());
+    }
+  });
+
+  const data = await apiRequest(`/api/aed/recordings/${recordingId}/aed-events?${params}`, { method: 'GET' });
+  return data.events as any[];
+};
+
+// Get AED summary for a recording
+export const getAEDSummary = async (recordingId: number) => {
+  const data = await apiRequest(`/api/aed/recordings/${recordingId}/aed-summary`, { method: 'GET' });
+  return data;
 };

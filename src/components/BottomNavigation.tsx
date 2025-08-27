@@ -1,11 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { 
   BarChart3, 
   Upload, 
   MapPin, 
   Scissors, 
-  Ear, 
   Network, 
   FileText, 
   Brain, 
@@ -14,11 +13,11 @@ import {
   Home,
   Settings,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Bird
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppearance } from "@/contexts/AppearanceContext";
-import { getRecordings } from "@/lib/api";
 
 interface BottomNavItem {
   id: string;
@@ -38,11 +37,11 @@ const bottomNavItems: BottomNavItem[] = [
     requiresProject: true
   },
   {
-    id: "aed",
+    id: "birdnet-aed",
     label: "AED",
-    icon: Ear,
-    path: "/aed",
-    requiresProject: true
+    icon: Bird,
+    path: "/birdnet-aed",
+    requiresProject: false
   },
   {
     id: "clustering",
@@ -55,7 +54,7 @@ const bottomNavItems: BottomNavItem[] = [
     id: "annotations",
     label: "Annotations",
     icon: FileText,
-    path: "/annotations",
+    path: "/annotation",
     requiresProject: true
   },
   {
@@ -69,7 +68,7 @@ const bottomNavItems: BottomNavItem[] = [
     id: "manage",
     label: "Manage",
     icon: Settings,
-    path: "/project",
+    path: "",
     requiresProject: true
   },
   {
@@ -99,20 +98,20 @@ interface BottomNavigationProps {
   projectId?: string;
 }
 
-export const BottomNavigation = ({ projectId }: BottomNavigationProps) => {
+const BottomNavigation = ({ projectId }: BottomNavigationProps) => {
+  const { transparencyEnabled } = useAppearance();
+  const base = transparencyEnabled ? "bg-white/60 backdrop-blur-md border-t border-white/30" : "bg-white border-t border-green-100";
+  
   const location = useLocation();
   const navigate = useNavigate();
-  const scrollRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState(() => {
-    // Determine active tab based on current path
     const path = location.pathname;
     if (path === "/dashboard") return "dashboard";
     if (path.includes("/projects/")) return "manage";
     if (path.includes("/segmentation")) return "segmentation";
-    if (path.includes("/aed")) return "aed";
-
+    if (path.includes("/birdnet-aed")) return "birdnet-aed";
     if (path.includes("/clustering")) return "clustering";
-    if (path.includes("/annotations")) return "annotations";
+    if (path.includes("/annotation")) return "annotations";
     if (path.includes("/models")) return "models";
     if (path.includes("/pattern-matching")) return "pattern-matching";
     if (path.includes("/insights")) return "insights";
@@ -124,30 +123,48 @@ export const BottomNavigation = ({ projectId }: BottomNavigationProps) => {
     if (path === "/dashboard") return setActiveTab("dashboard");
     if (path.includes("/projects/")) return setActiveTab("manage");
     if (path.includes("/segmentation")) return setActiveTab("segmentation");
-    if (path.includes("/aed")) return setActiveTab("aed");
-    if (path.includes("/clips")) return setActiveTab("clips");
+    if (path.includes("/birdnet-aed")) return setActiveTab("birdnet-aed");
     if (path.includes("/clustering")) return setActiveTab("clustering");
-    if (path.includes("/annotations")) return setActiveTab("annotations");
+    if (path.includes("/annotation")) return setActiveTab("annotations");
     if (path.includes("/models")) return setActiveTab("models");
     if (path.includes("/pattern-matching")) return setActiveTab("pattern-matching");
     if (path.includes("/insights")) return setActiveTab("insights");
     setActiveTab("dashboard");
   }, [location.pathname]);
 
-  const handleTabClick = (item: BottomNavItem) => {
+  const handleTabClick = async (item: BottomNavItem) => {
     setActiveTab(item.id);
     
-    // Construct the full path
-    let fullPath = item.path;
-    if (item.requiresProject && projectId) {
-      if (item.id === "manage") {
-        fullPath = `/projects/${projectId}`;
-      } else {
-        fullPath = `/projects/${projectId}${item.path}`;
-      }
+    // Handle navigation for different item types
+    if (item.id === "dashboard") {
+      navigate("/dashboard");
+      return;
     }
     
-    navigate(fullPath);
+    if (item.id === "birdnet-aed") {
+      navigate("/birdnet-aed");
+      return;
+    }
+    
+    // For project-specific items, check if we have a project context
+    if (item.requiresProject) {
+      if (projectId) {
+        if (item.id === "manage") {
+          navigate(`/projects/${projectId}`);
+        } else if (item.path === "") {
+          navigate(`/projects/${projectId}`);
+        } else {
+          navigate(`/projects/${projectId}${item.path}`);
+        }
+      } else {
+        // No project context, navigate to dashboard
+        navigate("/dashboard");
+      }
+      return;
+    }
+    
+    // Default fallback
+    navigate(item.path);
   };
 
   // Filter items based on whether we're in a project context
@@ -156,71 +173,10 @@ export const BottomNavigation = ({ projectId }: BottomNavigationProps) => {
     : bottomNavItems.filter(item => !item.requiresProject);
 
   return (
-    <NavShell projectId={projectId} />
-  );
-};
-
-const NavShell = ({ projectId }: { projectId?: string }) => {
-  const { transparencyEnabled } = useAppearance();
-  const base = transparencyEnabled ? "bg-white/60 backdrop-blur-md border-t border-white/30" : "bg-white border-t border-green-100";
-
-  // re-use logic by rendering children via composition would be better, but minimal change here
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState(() => {
-    const path = location.pathname;
-    if (path === "/dashboard") return "dashboard";
-    if (path.includes("/projects/")) return "manage";
-    if (path.includes("/segmentation")) return "segmentation";
-    if (path.includes("/aed")) return "aed";
-
-    if (path.includes("/clustering")) return "clustering";
-    if (path.includes("/annotations")) return "annotations";
-    if (path.includes("/models")) return "models";
-    if (path.includes("/pattern-matching")) return "pattern-matching";
-    if (path.includes("/insights")) return "insights";
-    return "dashboard";
-  });
-
-  const handleTabClick = async (item: BottomNavItem) => {
-    setActiveTab(item.id);
-    
-    // Special handling for AED: route to latest recording's AEDAnalysisPage
-    if (item.id === "aed") {
-      if (projectId) {
-        try {
-          const recs = await getRecordings(projectId);
-          if (recs && recs.length > 0) {
-            const latest = recs[0];
-            navigate(`/recordings/${latest.id}/aed`);
-            return;
-          }
-        } catch (_) {
-          // fall through to fallback navigation
-        }
-        // Fallback: go to project page if no recordings yet
-        navigate(`/projects/${projectId}`);
-        return;
-      }
-      // No project context: send to dashboard
-      navigate(`/dashboard`);
-      return;
-    }
-
-    // Default behavior for other tabs
-    let fullPath = item.path;
-    if (item.requiresProject && projectId) {
-      if (item.id === "manage") fullPath = `/projects/${projectId}`;
-      else fullPath = `/projects/${projectId}${item.path}`;
-    }
-    navigate(fullPath);
-  };
-
-  return (
     <div className={"fixed bottom-0 left-0 right-0 z-50 shadow-lg glass-nav " + base}>
       <div className="container mx-auto">
         <div className="flex items-center justify-between py-2.5 px-2">
-          {(projectId ? bottomNavItems : bottomNavItems.filter(item => !item.requiresProject)).map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             
@@ -275,4 +231,6 @@ const NavShell = ({ projectId }: { projectId?: string }) => {
       <div className="h-1 bg-green-50" />
     </div>
   );
-}; 
+};
+
+export default BottomNavigation;

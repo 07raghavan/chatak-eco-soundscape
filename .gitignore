@@ -64,12 +64,101 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# FFmpeg
+# FFmpeg and large binaries
 ffmpeg.zip
 backend/bin/ffmpeg.exe
 backend/bin/ffplay.exe
 backend/bin/ffprobe.exe
+ffmpeg.exe
+ffplay.exe
+ffprobe.exe
 *.exe
+
+# Temporary and generated files
+backend/temp_audio/
+backend/temp_audio_features/
+backend/temp_ffmpeg/
+backend/__pycache__/
+backend/uploads/segment-spectrograms/
+
+# Test and development files
+test_birdnet_*.py
+database_explorer.sql
+install_clustering.bat
+
+# Development documentation and notes
+not included/
+
+# Audio files (sample data)
+audio/
+
+# Large documentation files
+backend/bin/doc/
+
+# Requirements files (keep only the main one)
+requirements_clustering_py313.txt
+requirements_clustering.txt
+
+# Duplicate and unnecessary files
+# Duplicate AudioPlayer components
+src/components/clustering/AudioPlayer.tsx
+
+# Duplicate toast hook
+src/components/ui/use-toast.ts
+
+# Python cache files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Duplicate migration files (keep only one migration system)
+backend/migrations/
+backend/database/migrations/
+
+# Large model files (should be downloaded separately)
+backend/models/birdnet/BirdNET-Analyzer-main/
+
+# Test and debug files
+*.test.js
+*.test.ts
+*.test.tsx
+*.spec.js
+*.spec.ts
+*.spec.tsx
+debug-*.js
+debug-*.html
+test-*.sh
+test-*.md
+
+# Development and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts
+build/
+dist/
+.next/
+.nuxt/
+.cache/
+
+# Environment and config files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Temporary and deployment scripts
 extra.txt

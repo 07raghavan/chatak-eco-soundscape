@@ -15,7 +15,14 @@ import ProjectPlatform from "./pages/ProjectPlatform";
 import SitesManagement from "./pages/SitesManagement";
 import CreateSite from "./pages/CreateSite";
 import SegmentationPage from "./pages/SegmentationPage";
-import AEDPage from "./pages/AEDPage";
+
+import BirdNetAEDPage from "./pages/BirdNetAEDPage";
+import AudioClusteringPage from "./pages/AudioClusteringPage";
+
+import AnnotationPage from "./pages/AnnotationPage";
+import VolunteerAnnotationPage from "./pages/VolunteerAnnotationPage";
+import PlatformAnnotationPage from "./pages/PlatformAnnotationPage";
+import PublicAnnotationPage from "./pages/PublicAnnotationPage";
 import Home from "./pages/Home";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -71,9 +78,57 @@ function App() {
                   </ProtectedRoute>
                 } />
 
-                <Route path="/recordings/:recordingId/aed" element={
+
+
+
+
+                <Route path="/projects/:projectId/annotation" element={
                   <ProtectedRoute>
-                    <AEDPage />
+                    <AnnotationPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/annotation/volunteer" element={
+                  <ProtectedRoute>
+                    <VolunteerAnnotationPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/annotation/platform" element={
+                  <ProtectedRoute>
+                    <PlatformAnnotationPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/annotation/public" element={
+                  <ProtectedRoute>
+                    <PublicAnnotationPage />
+                  </ProtectedRoute>
+                } />
+
+
+
+                <Route path="/birdnet-aed" element={
+                  <ProtectedRoute>
+                    <BirdNetAEDPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/recordings/:recordingId/birdnet-aed" element={
+                  <ProtectedRoute>
+                    <BirdNetAEDPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/clustering" element={
+                  <ProtectedRoute>
+                    <AudioClusteringPage />
+                  </ProtectedRoute>
+                } />
+
+                <Route path="/projects/:projectId/clustering/:recordingId" element={
+                  <ProtectedRoute>
+                    <AudioClusteringPage />
                   </ProtectedRoute>
                 } />
 
